@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Topics · {{ app_name }}{% endblock %}
+{% block body %}
+<h1>Topics</h1>
+<p>Near-duplicates of past topics, including rejected ones, are refused.</p>
+<form class="card" method="post" action="/topics">
+  <label>Title <input name="title" required maxlength="200"></label>
+  <label>Description <textarea name="description" rows="3"></textarea></label>
+  <div class="row">
+    <label>Category
+      <select name="category">{% for item in categories %}<option value="{{ item }}">{{ category_labels[item] }}</option>{% endfor %}</select>
+    </label>
+    <label>Language
+      <select name="target_language">{% for item in languages %}<option value="{{ item }}">{{ language_labels[item] }}</option>{% endfor %}</select>
+    </label>
+    <label>Platform
+      <select name="target_platform">{% for item in platforms %}<option value="{{ item }}">{{ platform_labels[item] }}</option>{% endfor %}</select>
+    </label>
+  </div>
+  <label>Audience <input name="target_audience" value="curious adults"></label>
+  <div class="row">
+    <label>Priority (1–5) <input name="priority" type="number" min="1" max="5" value="3"></label>
+    <label>Potential (1–10) <input name="estimated_content_potential" type="number" min="1" max="10" value="5"></label>
+  </div>
+  <label>Source references, one URL or note per line <textarea name="source_references" rows="3"></textarea></label>
+  <label>Research references <textarea name="research_references" rows="3"></textarea></label>
+  <button type="submit">Save topic</button>
+</form>
+<table>
+  <tr><th>Title</th><th>Category</th><th>Status</th><th>Priority</th></tr>
+  {% for topic in topics %}
+  <tr>
+    <td><a href="/topics/{{ topic.id }}">{{ topic.title }}</a></td>
+    <td>{{ category_labels[topic.category] }}</td>
+    <td>{{ topic.status }}</td>
+    <td>{{ topic.priority }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No topics yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

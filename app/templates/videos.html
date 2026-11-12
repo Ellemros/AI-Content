@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Videos · {{ app_name }}{% endblock %}
+{% block body %}
+<h1>Video production</h1>
+<p>Short renders are 1080×1920. Long scripts use 1920×1080. Generate from a script page.</p>
+<table>
+  <tr><th>Status</th><th>Language</th><th>Profile</th><th>Approved</th></tr>
+  {% for video in videos %}
+  <tr>
+    <td><a href="/videos/{{ video.id }}">{{ video.status }}</a></td>
+    <td>{{ language_labels[video.language] }}</td>
+    <td>{{ video.profile }}</td>
+    <td>{{ "yes" if video.approved else "no" }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No videos yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

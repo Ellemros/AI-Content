@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/app.db
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+
+  ffmpeg:
+    profiles: ["tools"]
+    build: .
+    entrypoint: ["ffmpeg"]
+    volumes:
+      - ./data:/app/data

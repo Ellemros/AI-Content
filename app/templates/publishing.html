@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Exports · {{ app_name }}{% endblock %}
+{% block body %}
+<h1>Local exports</h1>
+<p>Publishing in this version records an approved file on disk. Upload is refused, including for YouTube, TikTok, and Instagram.</p>
+<h2>Recorded</h2>
+<table>
+  <tr><th>Platform</th><th>Path</th><th>When</th></tr>
+  {% for post in posts %}
+  <tr>
+    <td>{{ platform_labels[post.platform] }}</td>
+    <td>{{ post.local_export_path }}</td>
+    <td>{{ post.recorded_at }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3">No exports yet.</td></tr>
+  {% endfor %}
+</table>
+<h2>Approved videos</h2>
+<ul>
+  {% for video in approved %}
+  <li><a href="/videos/{{ video.id }}">{{ video.status }}</a> · {{ language_labels[video.language] }} · {{ video.profile }}</li>
+  {% else %}
+  <li>Approve a video before recording an export.</li>
+  {% endfor %}
+</ul>
+<h2>Attempts</h2>
+<ul>
+  {% for job in jobs %}
+  <li>{{ job.status }} · {{ platform_labels.get(job.platform, job.platform) }} · {{ job.detail }}</li>
+  {% else %}
+  <li>No publishing attempts.</li>
+  {% endfor %}
+</ul>
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.title }} · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">{{ category_labels[topic.category] }} · {{ language_labels[topic.target_language] }} · {{ platform_labels[topic.target_platform] }}</p>
+<h1>{{ topic.title }}</h1>
+<p>{{ topic.description or "No description." }}</p>
+<p>Audience {{ topic.target_audience }}. Priority {{ topic.priority }}. Potential {{ topic.estimated_content_potential }}.</p>
+<form method="post" action="/topics/{{ topic.id }}/status" class="inline">
+  <label>Status
+    <select name="status">
+      {% for status in statuses %}<option value="{{ status }}" {% if status == topic.status %}selected{% endif %}>{{ status }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Update status</button>
+</form>
+<h2>References</h2>
+<ul>
+  {% for ref in topic.source_references %}<li>Source: {{ ref.title or ref.url }}</li>{% endfor %}
+  {% for ref in topic.research_references %}<li>Research: {{ ref.title or ref.url }}</li>{% endfor %}
+  {% if not topic.source_references and not topic.research_references %}<li>None yet.</li>{% endif %}
+</ul>
+<h2>Scripts</h2>
+<p><a href="/topics/{{ topic.id }}/compare">Compare Czech and English</a></p>
+<ul>
+  {% for script in scripts %}
+  <li><a href="/scripts/{{ script.id }}">{{ language_labels[script.language] }} · {{ script.format }} · {{ script.status }}</a></li>
+  {% else %}
+  <li>No script yet.</li>
+  {% endfor %}
+</ul>
+<form method="post" action="/scripts/generate" class="card">
+  <input type="hidden" name="topic_id" value="{{ topic.id }}">
+  <div class="row">
+    <label>Language
+      <select name="language">{% for item in languages %}<option value="{{ item }}" {% if item == topic.target_language %}selected{% endif %}>{{ language_labels[item] }}</option>{% endfor %}</select>
+    </label>
+    <label>Format
+      <select name="video_format"><option value="short">Short 30–60s</option><option value="long">Long 5–10 min</option></select>
+    </label>
+  </div>
+  <label class="check"><input type="checkbox" name="force" value="yes"> Replace with a new version if one exists</label>
+  <button type="submit">Generate script</button>
+</form>
+{% endblock %}

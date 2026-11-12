@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+data/*.db
+data/*.db-*
+data/**/*.mp4
+data/**/*.wav
+data/**/*.mp3
+data/**/*.png
+data/**/*.srt
+data/**/*.log
+data/**/*.txt
+!data/**/.gitkeep
