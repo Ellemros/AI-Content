@@ -23,7 +23,7 @@ from app.domain import (
     PLATFORMS,
     TOPIC_STATUSES,
 )
-from app.models import Job, PublishedPost, PublishingJob, Script, ScriptVersion, Topic, Video
+from app.models import Asset, Job, JobEvent, PublishedPost, PublishingJob, Script, ScriptVersion, Topic, Video
 from app.schemas.content import FactualClaim, Reference, Scene, TopicCreate, TopicUpdate
 from app.services.analytics import placeholder
 from app.services.cost import month_spend
@@ -55,6 +55,17 @@ def _redirect(path: str, *, message: str | None = None, error: str | None = None
     return RedirectResponse(path, status_code=303)
 
 
+def _scheduler_on() -> bool:
+    from app.core.database import get_sessionmaker
+    from app.services.schedule import scheduler_enabled
+
+    session = get_sessionmaker()()
+    try:
+        return scheduler_enabled(session)
+    finally:
+        session.close()
+
+
 def _render(request: Request, name: str, **context):
     settings = get_settings()
     context.update(
@@ -62,6 +73,8 @@ def _render(request: Request, name: str, **context):
             "app_name": settings.app_name,
             "openai_on": settings.openai_enabled(),
             "eleven_on": settings.elevenlabs_enabled(),
+            "scheduler_on": _scheduler_on(),
+            "poll_seconds": settings.scheduler_poll_seconds,
             "tts_provider": settings.tts_provider,
             "message": request.query_params.get("message"),
             "error": request.query_params.get("error"),
@@ -246,12 +259,15 @@ def script_detail(script_id: str, request: Request, session: Session = Depends(g
         .where(ScriptVersion.script_id == script.id)
         .order_by(ScriptVersion.version_number.desc())
     ).all()
+    library = session.scalars(select(Asset).where(Asset.library.is_(True)).order_by(Asset.name)).all()
     return _render(
         request,
         "script_detail.html",
         script=script,
         version=version,
         versions=versions,
+        library=library,
+        asset_names={item.id: f"{item.name} · {item.kind} · {item.license}" for item in library},
         estimated=estimate_seconds(version.narration, script.language),
         claims_json=json.dumps(version.factual_claims, ensure_ascii=False, indent=2),
         scenes_json=json.dumps(version.scenes, ensure_ascii=False, indent=2),
@@ -384,12 +400,23 @@ def videos_generate(
 def video_detail(video_id: str, request: Request, session: Session = Depends(get_db)):
     video = _video(session, video_id)
     script = session.get(Script, video.script_id)
+    job = _job(session, video.id)
+    events = []
+    if job is not None:
+        events = session.scalars(
+            select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.created_at)
+        ).all()
+    srt_text = ""
+    if video.subtitle_path and Path(video.subtitle_path).is_file():
+        srt_text = Path(video.subtitle_path).read_text(encoding="utf-8")
     return _render(
         request,
         "video_detail.html",
         video=video,
         script=script,
-        job=_job(session, video.id),
+        job=job,
+        events=events,
+        srt_text=srt_text,
     )
 
 

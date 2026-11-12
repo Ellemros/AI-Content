@@ -3,7 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import NullPool
@@ -60,12 +60,59 @@ def reset_engine() -> None:
     _session_factory = None
 
 
+# Columns added after Phase 1. create_all does not alter an existing SQLite file.
+# Startup adds any missing column so a database from Phase 1 keeps its rows.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "assets": {
+        "name": "VARCHAR(160) NOT NULL DEFAULT ''",
+        "library": "BOOLEAN NOT NULL DEFAULT 0",
+    },
+    "api_usage": {
+        "video_id": "VARCHAR(36)",
+        "script_id": "VARCHAR(36)",
+    },
+    "videos": {
+        "master_path": "TEXT NOT NULL DEFAULT ''",
+        "subtitle_edited": "BOOLEAN NOT NULL DEFAULT 0",
+    },
+}
+
+
+def ensure_added_columns(engine: Engine | None = None) -> list[str]:
+    """Add Phase 2 columns on a database that was created before them.
+
+    SQLite and this MVP have no Alembic revision. `create_all` creates missing
+    tables and leaves existing tables alone. For each column above that
+    `PRAGMA table_info` does not already list, this runs `ALTER TABLE ... ADD COLUMN`.
+    New databases already have the columns, so this is a no-op there. Added
+    columns are nullable or have a constant default, so existing rows stay valid.
+    """
+    engine = engine or get_engine()
+    if engine.dialect.name != "sqlite":
+        return []
+    inspector = inspect(engine)
+    added: list[str] = []
+    with engine.begin() as conn:
+        for table, columns in _ADDED_COLUMNS.items():
+            if not inspector.has_table(table):
+                continue
+            present = {column["name"] for column in inspector.get_columns(table)}
+            for name, ddl in columns.items():
+                if name in present:
+                    continue
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+                added.append(f"{table}.{name}")
+    return added
+
+
 def init_db() -> None:
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("assets", "audio", "videos", "thumbnails", "exports", "cache"):
+    for name in ("assets", "audio", "videos", "thumbnails", "exports", "cache", "library"):
         (settings.data_dir / name).mkdir(parents=True, exist_ok=True)
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    ensure_added_columns(engine)
 
 
 def get_db() -> Iterator[Session]:

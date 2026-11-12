@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Channel, ContentTemplate
 from app.services.offline_scripts import iter_template_records
+from app.services.schedule import seed_scheduler_flag
 
 
 def seed(session: Session) -> None:
@@ -44,4 +45,5 @@ def seed(session: Session) -> None:
                     },
                 )
             )
+    seed_scheduler_flag(session)
     session.flush()

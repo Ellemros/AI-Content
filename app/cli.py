@@ -13,9 +13,10 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import PublishedPost
+from app.models import ProductionSchedule, PublishedPost
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
+from app.services.schedule import execute_schedule
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,13 +35,18 @@ def main(argv: list[str] | None = None) -> int:
     render.add_argument("--approve", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--export", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--reuse", action="store_true")
+    scheduled = sub.add_parser(
+        "run-schedule",
+        help="Run one named schedule once. Stops before approval and does not export.",
+    )
+    scheduled.add_argument("--name", required=True)
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    if args.export and not args.approve:
+    if args.command == "render-short" and args.export and not args.approve:
         print("Export only happens after approval. Use --approve or --no-export.")
         return 2
-    if args.tts:
+    if getattr(args, "tts", None):
         os.environ["TTS_PROVIDER"] = args.tts
         get_settings.cache_clear()
     configure_logging(get_settings().log_level)
@@ -48,6 +54,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with session_scope() as session:
             seed(session)
+            if args.command == "run-schedule":
+                schedule = session.scalar(
+                    select(ProductionSchedule).where(ProductionSchedule.name == args.name)
+                )
+                if schedule is None:
+                    print(f"No schedule named {args.name}.")
+                    return 1
+                schedule = execute_schedule(session, schedule)
+                print(f"Schedule: {schedule.name}")
+                print(f"Status: {schedule.last_status}")
+                if schedule.last_error:
+                    print(schedule.last_error)
+                if schedule.last_video_id:
+                    print(f"Video id: {schedule.last_video_id}")
+                print("Approval: required before any export.")
+                print("Upload: not called.")
+                return 0 if schedule.last_status in {"ready", "skipped"} else 1
             video = produce_short(
                 session,
                 title=args.title,

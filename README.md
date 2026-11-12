@@ -37,6 +37,24 @@ python -m app.cli render-short --tts espeak --language cs --title "Jak se stroje
 
 The command prints the MP4 path, `1080x1920 h264 / aac`, and an export path under `data/exports/`. A second run of the same title is rejected as a duplicate. Add `--reuse` to render again from the existing topic.
 
+## Scheduler
+
+The Production page is http://127.0.0.1:8000/production . Turn the poller on there. On a brand-new database, `SCHEDULER_ENABLED=true` in `.env` seeds that switch; after the row exists, the page is the control and a restart is not required.
+
+A schedule runs topic → script → voice → render on its interval, or immediately with Run now. It always stops before approval. It does not export and it does not upload. Approve the video on its page, then record the local export.
+
+```bash
+python -m app.cli run-schedule --name "Morning short"
+```
+
+`SCHEDULER_POLL_SECONDS` is how often the process looks for a due schedule. `0` keeps the poller from starting, which is what the tests use. Run now and `run-schedule` still work.
+
+## Library and subtitles
+
+Register images, clips, and music on the Library page with a source and a license. On a script, attach one to a scene. That file is reused across videos. A scene without an attachment still gets a generated card, and a video without library music still gets the generated bed.
+
+The video page can edit the SRT and re-burn captions onto the existing master, or rebuild the cues from the narration. Voice and scene art stay put when the master file is already there.
+
 `--export` requires `--approve`. The default is both. `--no-approve` leaves the file unexported until you approve it in the dashboard.
 
 ## Dashboard

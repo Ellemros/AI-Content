@@ -113,6 +113,8 @@ class Asset(Base):
     source: Mapped[str] = mapped_column(String(160))
     license: Mapped[str] = mapped_column(String(80))
     checksum: Mapped[str] = mapped_column(String(64), default="")
+    name: Mapped[str] = mapped_column(String(160), default="")
+    library: Mapped[bool] = mapped_column(Boolean, default=False)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
@@ -164,6 +166,8 @@ class Video(Base):
     asset_ids: Mapped[list] = mapped_column(JSON, default=list)
     subtitles_burned: Mapped[bool] = mapped_column(Boolean, default=False)
     checksum: Mapped[str] = mapped_column(String(64), default="")
+    master_path: Mapped[str] = mapped_column(Text, default="")
+    subtitle_edited: Mapped[bool] = mapped_column(Boolean, default=False)
     quality_report: Mapped[dict] = mapped_column(JSON, default=dict)
     approved: Mapped[bool] = mapped_column(Boolean, default=False)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -223,6 +227,8 @@ class APIUsage(Base):
     estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
     cached: Mapped[bool] = mapped_column(Boolean, default=False)
     month_key: Mapped[str] = mapped_column(String(7))
+    video_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    script_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
@@ -260,6 +266,54 @@ class Job(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class ProductionSchedule(Base):
+    """A repeating topic → script → voice → render. It never approves or exports."""
+
+    __tablename__ = "production_schedules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=1440)
+    topic_id: Mapped[str | None] = mapped_column(ForeignKey("topics.id"), nullable=True)
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    video_format: Mapped[str] = mapped_column(String(16), default="short")
+    stability: Mapped[float] = mapped_column(default=0.5)
+    similarity: Mapped[float] = mapped_column(default=0.75)
+    voice_id: Mapped[str] = mapped_column(String(120), default="")
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(32), default="idle")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_video_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class JobEvent(Base):
+    """One production step, failure, or retry. Shown on the video page."""
+
+    __tablename__ = "job_events"
+    __table_args__ = (Index("ix_job_events_job", "job_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    stage: Mapped[str] = mapped_column(String(40))
+    level: Mapped[str] = mapped_column(String(16), default="info")
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class RuntimeFlag(Base):
+    """Dashboard switches. The scheduler poller reads scheduler_enabled from here."""
+
+    __tablename__ = "runtime_flags"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
 
 
 class AIResponseCache(Base):

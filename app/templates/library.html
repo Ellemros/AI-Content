@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Library · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">Reusable media</p>
+<h1>Asset library</h1>
+<p>Register an image, a clip, or music with the place it came from and the license. Scenes that name one reuse that file. Scenes without one still get a generated card, and a video without library music still gets the generated bed.</p>
+{% if assets %}
+<table>
+  <tr><th>Name</th><th>Kind</th><th>Source</th><th>License</th></tr>
+  {% for asset in assets %}
+  <tr>
+    <td>{{ asset.name }}</td>
+    <td>{{ asset.kind }}</td>
+    <td>{{ asset.source }}</td>
+    <td>{{ asset.license }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>The library is empty. Generated cards are still used.</p>
+{% endif %}
+<form method="post" action="/library" enctype="multipart/form-data" class="card">
+  <h2>Register</h2>
+  <label>Name <input name="name" required></label>
+  <div class="row">
+    <label>Kind
+      <select name="kind">
+        <option value="image">Image</option>
+        <option value="clip">Clip</option>
+        <option value="music">Music</option>
+      </select>
+    </label>
+    <label>Source <input name="source" required placeholder="Where this file came from"></label>
+    <label>License <input name="license_name" required placeholder="CC BY 4.0, owned, ..."></label>
+  </div>
+  <label>File <input type="file" name="upload" required></label>
+  <button type="submit">Register asset</button>
+</form>
+{% endblock %}

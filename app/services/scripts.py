@@ -8,6 +8,7 @@ from app.core.errors import AppError
 from app.models import Script, ScriptVersion, Topic
 from app.providers.openai_provider import OpenAIProvider
 from app.schemas.content import FactualClaim, Scene, ScriptContent
+from app.services.cost import usage_scope
 from app.services.offline_scripts import build_offline_script
 from app.services.scenes import scenes_from_narration
 from app.services.textutil import split_sentences
@@ -177,19 +178,31 @@ def generate_script(
             Script.format == video_format,
         )
     )
-    if existing is not None and not force:
+    if existing is not None and existing.current_version_id and not force:
         return existing
-    if get_settings().openai_enabled():
-        content = _from_openai(session, topic, language, video_format)
-    else:
-        content = build_offline_script(
-            topic.title,
-            topic.category,
-            language,
-            video_format,
-            topic.description,
+    holder = existing
+    if holder is None and get_settings().openai_enabled():
+        holder = Script(
+            topic_id=topic.id,
+            language=language,
+            format=video_format,
+            title=topic.title[:200],
+            status="draft",
         )
-    return save_script(session, topic, content, existing if force else None)
+        session.add(holder)
+        session.flush()
+    with usage_scope(script_id=None if holder is None else holder.id):
+        if get_settings().openai_enabled():
+            content = _from_openai(session, topic, language, video_format)
+        else:
+            content = build_offline_script(
+                topic.title,
+                topic.category,
+                language,
+                video_format,
+                topic.description,
+            )
+    return save_script(session, topic, content, holder)
 
 
 def edit_script(session: Session, script: Script, content: ScriptContent) -> ScriptVersion:

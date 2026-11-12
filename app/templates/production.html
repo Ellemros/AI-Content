@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Production · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">Scheduler</p>
+<h1>Production</h1>
+<p>A due schedule runs topic, script, voice, and render, then stops. Approval and export stay on the video page. Nothing is uploaded.</p>
+<section class="split">
+  <article>
+    <h2>Poller {{ "on" if poller_on else "off" }}</h2>
+    <p>The poller checks about every {{ "%.0f"|format(poll_seconds) }} seconds. Run now works while the poller is off.</p>
+    <form method="post" action="/production/scheduler">
+      <input type="hidden" name="enabled" value="{{ 'false' if poller_on else 'true' }}">
+      <button type="submit">{{ "Turn poller off" if poller_on else "Turn poller on" }}</button>
+    </form>
+    <p class="muted">A new database also reads <code>SCHEDULER_ENABLED</code> once. After that, this switch is what the poller reads.</p>
+  </article>
+  <article>
+    <h2>Spend this month</h2>
+    <p class="figure">${{ "%.2f"|format(spend) }} <span>of ${{ "%.2f"|format(cap) }}</span></p>
+    <p>Paid calls still fail closed at the cap. Offline work stays at zero.</p>
+    {% if unassigned %}
+    <p class="muted">${{ "%.2f"|format(unassigned) }} is not tied to a video.</p>
+    {% endif %}
+  </article>
+</section>
+
+<h2>Schedules</h2>
+{% if schedules %}
+<table>
+  <tr><th>Name</th><th>Every</th><th>Topic</th><th>Last</th><th></th></tr>
+  {% for item in schedules %}
+  <tr>
+    <td>{{ item.name }}<br><span class="muted">{{ "on" if item.enabled else "off" }} · {{ language_labels[item.language] }}</span></td>
+    <td>{{ item.interval_minutes }} min</td>
+    <td>{% if item.topic_id %}one topic{% else %}next waiting topic{% endif %}</td>
+    <td>{{ item.last_status }}{% if item.last_error %}<br><span class="muted">{{ item.last_error }}</span>{% endif %}</td>
+    <td>
+      <form method="post" action="/production/schedules/{{ item.id }}/run" class="inline"><button type="submit">Run now</button></form>
+      <form method="post" action="/production/schedules/{{ item.id }}/toggle" class="inline"><button type="submit" class="quiet">{{ "Disable" if item.enabled else "Enable" }}</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No schedules yet.</p>
+{% endif %}
+
+<form method="post" action="/production/schedules" class="card">
+  <h2>New schedule</h2>
+  <label>Name <input name="name" required placeholder="Morning short"></label>
+  <div class="row">
+    <label>Every (minutes) <input name="interval_minutes" type="number" min="1" max="10080" value="1440"></label>
+    <label>Language
+      <select name="language">{% for item in languages %}<option value="{{ item }}">{{ language_labels[item] }}</option>{% endfor %}</select>
+    </label>
+    <label>Topic
+      <select name="topic_id">
+        <option value="">Next Idea or Ready topic</option>
+        {% for topic in topics %}<option value="{{ topic.id }}">{{ topic.title }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <label class="check"><input type="checkbox" name="enabled" value="yes"> Enabled for the poller</label>
+  <button type="submit">Save schedule</button>
+</form>
+
+<h2>Jobs that need attention</h2>
+{% if jobs %}
+<table>
+  <tr><th>Status</th><th>Stage</th><th>Attempt</th><th>Error</th><th></th></tr>
+  {% for job in jobs %}
+  <tr>
+    <td>{{ job.status }}</td>
+    <td>{{ job.stage }} · {{ job.progress }}%</td>
+    <td>{{ job.attempts }}</td>
+    <td>{{ job.error }}</td>
+    <td>{% if job.video_id %}<a href="/videos/{{ job.video_id }}">Open</a>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No running, failed, or interrupted jobs.</p>
+{% endif %}
+
+<h2>Cost per video this month</h2>
+{% if costs %}
+<table>
+  <tr><th>Video</th><th>Status</th><th>USD</th></tr>
+  {% for row in costs %}
+  <tr>
+    <td><a href="/videos/{{ row.video.id }}">{{ row.video.language }} · {{ row.video.status }}</a></td>
+    <td>{{ row.video.status }}</td>
+    <td>${{ "%.4f"|format(row.cost) }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No videos to attribute this month. The month total above is still the cap.</p>
+{% endif %}
+{% endblock %}

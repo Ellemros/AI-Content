@@ -14,6 +14,8 @@
       <a href="/topics">Topics</a>
       <a href="/scripts">Scripts</a>
       <a href="/videos">Videos</a>
+      <a href="/library">Library</a>
+      <a href="/production">Production</a>
       <a href="/publishing">Exports</a>
       <a href="/analytics">Analytics</a>
     </nav>
@@ -21,6 +23,7 @@
       OpenAI {{ "on" if openai_on else "off" }}
       · ElevenLabs {{ "on" if eleven_on else "off" }}
       · voice {{ tts_provider }}
+      · scheduler {{ "on" if scheduler_on else "off" }}
     </p>
   </header>
   <main>

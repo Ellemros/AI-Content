@@ -11,6 +11,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
     monkeypatch.setenv("TTS_PROVIDER", "espeak")
     monkeypatch.setenv("MONTHLY_SPEND_CAP_USD", "25")
+    monkeypatch.setenv("SCHEDULER_POLL_SECONDS", "0")
     get_settings.cache_clear()
     reset_engine()
     init_db()

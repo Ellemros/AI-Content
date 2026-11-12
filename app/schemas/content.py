@@ -48,6 +48,8 @@ class Scene(BaseModel):
     narration: str = Field(min_length=1)
     visual: str = Field(min_length=1)
     on_screen_text: str = Field(min_length=1, max_length=80)
+    asset_id: str | None = None
+    music_asset_id: str | None = None
 
 
 class ScriptContent(BaseModel):
