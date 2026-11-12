@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Research · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">AI &amp; Future · English channel · Czech is a language, not a second channel</p>
+<h1>Content intelligence</h1>
+<p class="banner">Scores are editorial heuristics. They are not search volume, competition, or revenue. A feed summary is not a verified fact. Discovery does not render or upload a video.</p>
+<p>Auto-promotion needs a score of at least {{ minimum }}, a confirmed original URL, and no clickbait marker. The editorial gate is {{ "on" if gate else "off" }}. Threshold {{ editorial_minimum }}.</p>
+
+<form method="post" action="/research/discover" class="inline">
+  <button type="submit">Discover topics</button>
+</form>
+
+<h2>Sources</h2>
+<table>
+  <tr><th>Name</th><th>Category</th><th>Status</th><th></th></tr>
+  {% for source in sources %}
+  <tr>
+    <td>{{ source.name }}<br><span class="muted">{{ source.url }}</span></td>
+    <td>{{ category_labels.get(source.category, source.category) }}</td>
+    <td>{{ "on" if source.enabled else "off" }} · {{ source.last_status }}{% if source.last_error %}<br>{{ source.last_error }}{% endif %}</td>
+    <td>
+      <form method="post" action="/research/sources/{{ source.id }}/toggle">
+        <button type="submit">{{ "Disable" if source.enabled else "Enable" }}</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No sources yet.</td></tr>
+  {% endfor %}
+</table>
+
+<form class="card" method="post" action="/research/sources">
+  <h2>Add an RSS or Atom feed</h2>
+  <label>Name <input name="name" required maxlength="160"></label>
+  <label>HTTPS URL <input name="url" type="url" required placeholder="https://"></label>
+  <label>Category
+    <select name="category">
+      {% for item in categories %}<option value="{{ item }}">{{ category_labels[item] }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Save source</button>
+</form>
+
+<h2>Discovered topics</h2>
+<table>
+  <tr><th>Topic</th><th>Score</th><th>Horizon</th><th>Source</th><th></th></tr>
+  {% for item in items %}
+  <tr>
+    <td>
+      <strong>{{ item.title }}</strong>
+      <p>{{ item.summary or "No feed summary. Open the source." }}</p>
+      <p>Audience: {{ item.audience }}</p>
+      <p>{{ item.monetization_note }}</p>
+      {% if item.rejection_reason %}<p>{{ item.rejection_reason }}</p>{% endif %}
+      {% if item.score_breakdown %}
+      <details>
+        <summary>Score breakdown</summary>
+        <ul>
+          {% for key, part in item.score_breakdown.items() %}
+          <li>{{ key }}: {% if part.score is none %}unavailable{% else %}{{ part.score }}{% endif %} — {{ part.note }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </td>
+    <td>{{ item.score if item.score is not none else "—" }}<br>{{ item.status }}</td>
+    <td>{{ item.horizon }}<br>{{ category_labels.get(item.category, item.category) }}</td>
+    <td>
+      {% if item.url %}<a href="{{ item.url }}">Original</a>{% endif %}
+      <br>{{ "URL responded" if item.source_verified else "URL not confirmed" }}
+      {% if item.source_status %} ({{ item.source_status }}){% endif %}
+    </td>
+    <td>
+      {% if item.status == "promoted" and item.topic_id %}
+      <a href="/topics/{{ item.topic_id }}">Open topic</a>
+      {% elif item.status != "duplicate" %}
+      <form method="post" action="/research/items/{{ item.id }}/promote">
+        {% if item.score is none or item.score < minimum or not item.source_verified %}
+        <label><input type="checkbox" name="override" value="yes"> Promote anyway</label>
+        {% endif %}
+        <button type="submit">Promote to topic</button>
+      </form>
+      {% else %}
+      Duplicate
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No discoveries yet. Run Discover topics.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

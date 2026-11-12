@@ -74,6 +74,7 @@ button:hover { background: var(--green-deep); }
 .inline label { margin: 0; }
 .check { display: flex; gap: 0.4rem; align-items: center; }
 .check input { width: auto; }
+.muted { color: var(--muted, #5c6b66); font-size: 0.92rem; }
 .flash, .banner { padding: 0.6rem 0.8rem; border-radius: 8px; }
 .flash.ok, .banner { background: #e5f2ea; }
 .flash.bad { background: #f8e4e4; color: var(--bad); }

@@ -47,6 +47,24 @@ uvicorn app.main:app --reload
 
 Open http://127.0.0.1:8000 . From there you can add a topic, generate or edit a script, compare English and Czech, render a video, watch progress, approve it, and record a local export. The publishing page refuses any upload.
 
+## Research, no API keys
+
+The brand is AI & Future. English is the channel. Czech stays a separate narration, not a second channel and not translated subtitles on the English cut.
+
+```bash
+python -m app.cli discover
+```
+
+That fetches the configured public feeds (arXiv cs.AI, the Google AI blog, and OpenAI News), stores each item, and scores it. A strong on-niche item with a confirmed original URL becomes a topic in `Researching`. A trusted site is not enough when the title is outside AI and future technology. Nothing is rendered or uploaded. Run it again and unchanged feeds are skipped. Some publishers answer 403 to this client. Those items stay in the queue instead of being treated as verified.
+
+The Research page (`/research`) shows the same queue. Add another HTTPS feed there, or turn one off. Scores are editorial heuristics. Search volume and competition stay empty until a real data source is connected. A feed summary is labeled as a lead, not a verified fact. The original URL is checked with a short request. The page body is not turned into claims.
+
+On a script page, **Run editorial review** stores an audience, a central question, a takeaway, the evidence, and a score from 0 to 100. A specific unsourced claim fails the review. `EDITORIAL_GATE` defaults to off, so `render-short` behaves as before. Set `EDITORIAL_GATE=true` to refuse a render below `EDITORIAL_QUALITY_MINIMUM` (default 70).
+
+```bash
+python -m app.cli review-script --id SCRIPT_ID
+```
+
 ## Environment
 
 | Variable | Role |
@@ -59,6 +77,10 @@ Open http://127.0.0.1:8000 . From there you can add a topic, generate or edit a 
 | `MONTHLY_SPEND_CAP_USD` | Paid calls over this cap fail with a clear error. `0` blocks every paid call. |
 | `NEAR_DUPLICATE_THRESHOLD` | Jaccard cutoff for topic titles. Default `0.82`. |
 | `FONT_PATH` | Optional. Defaults to DejaVu Sans, then Arial. |
+| `TOPIC_SCORE_MINIMUM` | Auto-promote cutoff, 0–100. Default `55`. |
+| `EDITORIAL_QUALITY_MINIMUM` | Editorial reject cutoff. Default `70`. |
+| `EDITORIAL_GATE` | `true` blocks a render below the editorial cutoff. Default `false`. |
+| `RESEARCH_MAX_ITEMS` | Items read from each feed. Default `8`. |
 
 Leave both keys empty to stay on offline script templates and a local voice. Offline drafts are marked as drafts and do not invent citations.
 

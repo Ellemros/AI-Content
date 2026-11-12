@@ -23,7 +23,16 @@ from app.domain import (
     PLATFORMS,
     TOPIC_STATUSES,
 )
-from app.models import Job, PublishedPost, PublishingJob, Script, ScriptVersion, Topic, Video
+from app.models import (
+    EditorialReview,
+    Job,
+    PublishedPost,
+    PublishingJob,
+    Script,
+    ScriptVersion,
+    Topic,
+    Video,
+)
 from app.schemas.content import FactualClaim, Reference, Scene, TopicCreate, TopicUpdate
 from app.services.analytics import placeholder
 from app.services.cost import month_spend
@@ -246,12 +255,18 @@ def script_detail(script_id: str, request: Request, session: Session = Depends(g
         .where(ScriptVersion.script_id == script.id)
         .order_by(ScriptVersion.version_number.desc())
     ).all()
+    review = session.scalar(
+        select(EditorialReview)
+        .where(EditorialReview.script_id == script.id)
+        .order_by(EditorialReview.created_at.desc())
+    )
     return _render(
         request,
         "script_detail.html",
         script=script,
         version=version,
         versions=versions,
+        review=review,
         estimated=estimate_seconds(version.narration, script.language),
         claims_json=json.dumps(version.factual_claims, ensure_ascii=False, indent=2),
         scenes_json=json.dumps(version.scenes, ensure_ascii=False, indent=2),

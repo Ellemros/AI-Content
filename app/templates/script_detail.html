@@ -4,6 +4,25 @@
 <p class="eyebrow">{{ language_labels[script.language] }} · {{ script.format }} · {{ script.status }} · ~{{ estimated }}s spoken</p>
 <h1>{{ version.title }}</h1>
 {% if version.offline_draft %}<p class="banner">Offline draft. No citations were generated. Verify any fact before you approve.</p>{% endif %}
+<section class="card">
+  <h2>Editorial review</h2>
+  {% if review %}
+  <p>Score {{ review.quality_score }} · originality {{ review.originality_score }} · threshold {{ review.threshold }} · {{ "passed" if review.passed else "rejected" }}</p>
+  <p>Audience: {{ review.audience }}</p>
+  <p>Question: {{ review.central_question }}</p>
+  <p>Takeaway: {{ review.takeaway }}</p>
+  {% if review.issues %}
+  <ul>
+    {% for issue in review.issues %}
+    <li>{{ issue.kind }} — {{ issue.detail }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% else %}
+  <p>No review yet. Rendering still works while the editorial gate is off. Run a review before you approve a video you intend to publish.</p>
+  {% endif %}
+  <form method="post" action="/scripts/{{ script.id }}/review"><button type="submit">Run editorial review</button></form>
+</section>
 <p>Provider {{ version.provider }}{% if version.template_key %} · template {{ version.template_key }}{% endif %} · version {{ version.version_number }}</p>
 <section class="split">
   <article>

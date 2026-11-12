@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.publishing import router as publishing_router
+from app.api.research import router as research_api_router
 from app.api.scripts import router as scripts_router
 from app.api.topics import router as topics_router
 from app.api.videos import router as videos_router
@@ -18,6 +19,7 @@ from app.core.jobs import mark_interrupted
 from app.core.logging import configure_logging
 from app.core.scheduler import register_future_jobs
 from app.core.seed import seed
+from app.web.research import router as research_router
 from app.web.views import router as web_router
 
 
@@ -44,10 +46,12 @@ def create_app() -> FastAPI:
         name="static",
     )
     app.include_router(web_router)
+    app.include_router(research_router)
     app.include_router(topics_router)
     app.include_router(scripts_router)
     app.include_router(videos_router)
     app.include_router(publishing_router)
+    app.include_router(research_api_router)
 
     @app.get("/health")
     def health() -> dict:
