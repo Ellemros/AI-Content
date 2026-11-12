@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}{{ script.title }} · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">{{ language_labels[script.language] }} · {{ script.format }} · {{ script.status }} · ~{{ estimated }}s spoken</p>
+<h1>{{ version.title }}</h1>
+{% if version.offline_draft %}<p class="banner">Offline draft. No citations were generated. Verify any fact before you approve.</p>{% endif %}
+<p>Provider {{ version.provider }}{% if version.template_key %} · template {{ version.template_key }}{% endif %} · version {{ version.version_number }}</p>
+<section class="split">
+  <article>
+    <h2>Hook</h2>
+    <p>{{ version.hook }}</p>
+    <h2>Narration</h2>
+    <p>{{ version.narration }}</p>
+    <h2>Scenes</h2>
+    <ol>
+      {% for scene in version.scenes %}
+      <li><strong>{{ scene.on_screen_text }}</strong> — {{ scene.narration }}<br><em>{{ scene.visual }}</em></li>
+      {% endfor %}
+    </ol>
+  </article>
+  <article>
+    <h2>Metadata</h2>
+    <p>Mood {{ version.music_mood }}. CTA: {{ version.cta }}</p>
+    <p>{{ version.description }}</p>
+    <p>{{ version.hashtags|join(" ") }}</p>
+    <p>Thumbnail: {{ version.thumbnail_text }}</p>
+    <h2>Claims</h2>
+    <ul>
+      {% for claim in version.factual_claims %}
+      <li>{{ claim.text }} — {% if claim.verified %}verified{% elif claim.unverified %}unverified{% endif %}
+        {% if claim.sources %}<br>{{ claim.sources|join(", ") }}{% endif %}
+      </li>
+      {% else %}<li>No factual claims stored.</li>{% endfor %}
+    </ul>
+  </article>
+</section>
+<form method="post" action="/scripts/{{ script.id }}/approve" class="inline"><button type="submit">Approve script</button></form>
+<form method="post" action="/scripts/{{ script.id }}/localize" class="inline">
+  <input type="hidden" name="language" value="{{ 'cs' if script.language == 'en' else 'en' }}">
+  <button type="submit">Write the {{ 'Czech' if script.language == 'en' else 'English' }} version</button>
+</form>
+<p><a href="/topics/{{ script.topic_id }}/compare">Compare both languages</a></p>
+<h2>Edit</h2>
+<p>Saving writes a new version. Rebuild scenes keeps the breakdown aligned with the narration.</p>
+<form method="post" action="/scripts/{{ script.id }}/edit" class="card">
+  <label>Title <input name="title" value="{{ version.title }}" required></label>
+  <label>Hook <input name="hook" value="{{ version.hook }}" required></label>
+  <label>Narration <textarea name="narration" rows="8" required>{{ version.narration }}</textarea></label>
+  <label>Visual instructions <textarea name="visual_instructions" rows="3" required>{{ version.visual_instructions }}</textarea></label>
+  <div class="row">
+    <label>Music mood <input name="music_mood" value="{{ version.music_mood }}" required></label>
+    <label>Thumbnail text <input name="thumbnail_text" value="{{ version.thumbnail_text }}" required></label>
+  </div>
+  <label>Call to action <input name="cta" value="{{ version.cta }}" required></label>
+  <label>Description <textarea name="description" rows="3" required>{{ version.description }}</textarea></label>
+  <label>Hashtags <input name="hashtags" value="{{ version.hashtags|join(', ') }}" required></label>
+  <label>Factual claims JSON <textarea name="factual_claims" rows="6">{{ claims_json }}</textarea></label>
+  <label class="check"><input type="checkbox" name="rebuild_scenes" value="yes" checked> Rebuild scenes from narration</label>
+  <label>Scenes JSON, used only when rebuild is off <textarea name="scenes_json" rows="6">{{ scenes_json }}</textarea></label>
+  <button type="submit">Save version</button>
+</form>
+<form method="post" action="/videos/generate" class="card">
+  <input type="hidden" name="script_id" value="{{ script.id }}">
+  <div class="row">
+    <label>Stability <input name="stability" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+    <label>Similarity <input name="similarity" type="number" min="0" max="1" step="0.05" value="0.75"></label>
+    <label>Voice id <input name="voice_id" placeholder="engine default"></label>
+  </div>
+  <button type="submit">Generate video</button>
+</form>
+<h2>Versions</h2>
+<ul>{% for item in versions %}<li>v{{ item.version_number }} · {{ item.provider }} · {{ item.created_at }}</li>{% endfor %}</ul>
+{% endblock %}

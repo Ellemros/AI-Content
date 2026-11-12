@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Compare · {{ topic.title }}{% endblock %}
+{% block body %}
+<p class="eyebrow">{{ video_format }} · {{ topic.title }}</p>
+<h1>Czech and English</h1>
+<p>Same topic, separate scripts. Offline Czech is written for a Czech audience, not line-translated.</p>
+<section class="split">
+  {% for code in ["en", "cs"] %}
+  <article>
+    <h2>{{ language_labels[code] }}</h2>
+    {% if pair.get(code) %}
+      {% set version = pair[code].version %}
+      {% set script = pair[code].script %}
+      <p><a href="/scripts/{{ script.id }}">{{ version.title }}</a> · {{ script.status }}</p>
+      {% if version.offline_draft %}<p class="banner">Offline draft</p>{% endif %}
+      <h3>{{ version.hook }}</h3>
+      <p>{{ version.narration }}</p>
+    {% else %}
+      <p>No {{ language_labels[code] }} script for this format yet.</p>
+      <form method="post" action="/scripts/generate">
+        <input type="hidden" name="topic_id" value="{{ topic.id }}">
+        <input type="hidden" name="language" value="{{ code }}">
+        <input type="hidden" name="video_format" value="{{ video_format }}">
+        <button type="submit">Generate {{ language_labels[code] }}</button>
+      </form>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endblock %}

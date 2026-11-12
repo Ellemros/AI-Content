@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Scripts · {{ app_name }}{% endblock %}
+{% block body %}
+<h1>Scripts</h1>
+<form method="post" action="/scripts/generate" class="card">
+  <label>Topic
+    <select name="topic_id" required>
+      {% for topic in topics %}<option value="{{ topic.id }}">{{ topic.title }}</option>{% endfor %}
+    </select>
+  </label>
+  <div class="row">
+    <label>Language <select name="language">{% for item in languages %}<option value="{{ item }}">{{ language_labels[item] }}</option>{% endfor %}</select></label>
+    <label>Format <select name="video_format"><option value="short">Short</option><option value="long">Long</option></select></label>
+  </div>
+  <button type="submit">Generate</button>
+</form>
+<table>
+  <tr><th>Title</th><th>Language</th><th>Format</th><th>Status</th></tr>
+  {% for script in scripts %}
+  <tr>
+    <td><a href="/scripts/{{ script.id }}">{{ script.title }}</a></td>
+    <td>{{ language_labels[script.language] }}</td>
+    <td>{{ script.format }}</td>
+    <td>{{ script.status }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No scripts yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="top">
+    <a class="mark" href="/">{{ app_name }}</a>
+    <nav>
+      <a href="/topics">Topics</a>
+      <a href="/scripts">Scripts</a>
+      <a href="/videos">Videos</a>
+      <a href="/publishing">Exports</a>
+      <a href="/analytics">Analytics</a>
+    </nav>
+    <p class="keys">
+      OpenAI {{ "on" if openai_on else "off" }}
+      · ElevenLabs {{ "on" if eleven_on else "off" }}
+      · voice {{ tts_provider }}
+    </p>
+  </header>
+  <main>
+    {% if message %}<p class="flash ok">{{ message }}</p>{% endif %}
+    {% if error %}<p class="flash bad">{{ error }}</p>{% endif %}
+    {% block body %}{% endblock %}
+  </main>
+</body>
+</html>

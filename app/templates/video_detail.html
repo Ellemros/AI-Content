@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Video · {{ app_name }}{% endblock %}
+{% block head %}{% if video.status == 'rendering' %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block body %}
+<p class="eyebrow">{{ video.profile }} · {{ language_labels[video.language] }} · {{ video.tts_provider }}</p>
+<h1>{{ video.status|capitalize }}</h1>
+{% if job %}
+<p>Stage {{ job.stage }} · attempt {{ job.attempts }} · {{ job.progress }}%</p>
+<div class="bar"><span style="width: {{ job.progress }}%"></span></div>
+{% endif %}
+{% if video.error %}<p class="flash bad">{{ video.error }}</p>{% endif %}
+{% if video.path and video.status != 'rendering' %}
+<video controls src="/videos/{{ video.id }}/file"></video>
+<p>{{ video.width }}×{{ video.height }} · {{ "%.1f"|format(video.duration_seconds) }}s</p>
+{% endif %}
+{% if video.quality_report and video.quality_report.checks %}
+<h2>Quality gate</h2>
+<ul>
+  {% for check in video.quality_report.checks %}
+  <li class="{{ 'pass' if check.passed else 'fail' }}">{{ check.name }} — {{ check.detail }}</li>
+  {% endfor %}
+</ul>
+{% endif %}
+{% if script %}<p><a href="/scripts/{{ script.id }}">Open script</a></p>{% endif %}
+{% if video.status == 'ready' %}
+<form method="post" action="/videos/{{ video.id }}/approve"><button type="submit">Approve video</button></form>
+{% endif %}
+{% if video.approved %}
+<form method="post" action="/publishing/record" class="inline">
+  <input type="hidden" name="video_id" value="{{ video.id }}">
+  <label>Platform
+    <select name="platform">{% for item in platforms %}<option value="{{ item }}">{{ platform_labels[item] }}</option>{% endfor %}</select>
+  </label>
+  <button type="submit">Record local export</button>
+</form>
+<p>This does not upload. YouTube, TikTok, and Instagram stay untouched.</p>
+{% endif %}
+{% if video.status in ['failed', 'interrupted', 'blocked'] %}
+<form method="post" action="/videos/{{ video.id }}/retry"><button type="submit">Retry render</button></form>
+{% endif %}
+{% if video.status != 'exported' %}
+<form method="post" action="/videos/{{ video.id }}/regenerate" class="inline">
+  <label>Component
+    <select name="component">
+      <option value="audio">Audio</option>
+      <option value="subtitles">Subtitles</option>
+      <option value="visuals">Visuals</option>
+      <option value="render">Render</option>
+    </select>
+  </label>
+  <button type="submit">Regenerate</button>
+</form>
+{% endif %}
+{% endblock %}

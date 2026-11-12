@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Overview · {{ app_name }}{% endblock %}
+{% block body %}
+<section class="hero">
+  <p class="eyebrow">Phase 1 · local factory</p>
+  <h1>Topics become a vertical MP4. Nothing is uploaded.</h1>
+  <p>English and Czech, one topic, separate scripts. Offline drafts do not invent citations. Approve a video before the export record.</p>
+</section>
+<section class="counts">
+  {% for label, value in [("Topics", counts.topics), ("Scripts", counts.scripts), ("Videos", counts.videos), ("Ready", counts.ready), ("Approved", counts.approved), ("Exports", counts.exports)] %}
+  <article><span>{{ label }}</span><strong>{{ value }}</strong></article>
+  {% endfor %}
+</section>
+<section class="split">
+  <article>
+    <h2>Topics by status</h2>
+    <ul class="plain">
+      {% for status, value in by_status.items() %}
+      <li><span>{{ status }}</span><b>{{ value }}</b></li>
+      {% endfor %}
+    </ul>
+  </article>
+  <article>
+    <h2>Spend this month</h2>
+    <p class="figure">${{ "%.2f"|format(spend) }} <span>of ${{ "%.2f"|format(cap) }}</span></p>
+    <p>Paid calls stop with a clear error at the cap. Empty keys stay on the offline path, which costs nothing.</p>
+  </article>
+</section>
+<section>
+  <h2>Recent topics</h2>
+  {% if recent %}
+  <table>
+    <tr><th>Title</th><th>Status</th><th>Language</th></tr>
+    {% for topic in recent %}
+    <tr>
+      <td><a href="/topics/{{ topic.id }}">{{ topic.title }}</a></td>
+      <td>{{ topic.status }}</td>
+      <td>{{ language_labels[topic.target_language] }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p>No topics yet. <a href="/topics">Add the first one.</a></p>
+  {% endif %}
+</section>
+{% endblock %}
