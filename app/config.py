@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     near_duplicate_threshold: float = 0.82
     font_path: str = ""
 
+    # Content intelligence. Scores are heuristics. They are not search volume.
+    topic_score_minimum: int = 55
+    editorial_quality_minimum: int = 70
+    editorial_gate: bool = False
+    research_timeout_seconds: float = 8.0
+    research_max_items: int = 8
+    research_verify_limit: int = 8
+
     video_fps: int = Field(default=30)
 
     def openai_enabled(self) -> bool:

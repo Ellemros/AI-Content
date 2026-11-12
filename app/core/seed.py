@@ -3,22 +3,30 @@
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Channel, ContentTemplate
+from app.models import Channel, ContentTemplate, ResearchSource
 from app.services.offline_scripts import iter_template_records
+from app.services.research.brand import BRAND_DESCRIPTION, BRAND_NAME, DEFAULT_FEEDS
 
 
 def seed(session: Session) -> None:
-    count = session.scalar(select(func.count()).select_from(Channel)) or 0
-    if count == 0:
+    channel = session.scalar(select(Channel).where(Channel.slug == "default"))
+    if channel is None and (session.scalar(select(func.count()).select_from(Channel)) or 0) == 0:
         session.add(
             Channel(
-                name="AI Content Factory",
+                name=BRAND_NAME,
                 slug="default",
                 default_language="en",
                 default_platform="youtube_shorts",
-                description="Faceless explainers about AI, technology, science, and careful facts.",
+                description=BRAND_DESCRIPTION,
             )
         )
+    elif channel is not None and channel.name == "AI Content Factory":
+        channel.name = BRAND_NAME
+        channel.description = BRAND_DESCRIPTION
+    for name, url, category in DEFAULT_FEEDS:
+        exists = session.scalar(select(ResearchSource).where(ResearchSource.url == url))
+        if exists is None:
+            session.add(ResearchSource(name=name, kind="rss", url=url, category=category, enabled=True))
     for record in iter_template_records():
         exists = session.scalar(
             select(ContentTemplate).where(

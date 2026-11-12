@@ -13,9 +13,52 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import PublishedPost
+from app.models import PublishedPost, Script
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
+from app.services.research import review_script, run_discovery
+
+
+def _discover() -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        report = run_discovery(session)
+    print(
+        f"Sources checked: {report['sources']}. "
+        f"New items: {report['created']}. "
+        f"Promoted: {report['promoted']}. "
+        f"Duplicates: {report['duplicates']}. "
+        f"Cached: {report['cached_sources']}."
+    )
+    for name, error in report["failed_sources"]:
+        print(f"Failed source: {name}: {error}")
+    print("No video was rendered. Scores are editorial heuristics, not search volume.")
+    if report["sources"] and len(report["failed_sources"]) == report["sources"]:
+        return 1
+    return 0
+
+
+def _review(script_id: str) -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        script = session.get(Script, script_id)
+        if script is None:
+            print("Script was not found.")
+            return 1
+        review = review_script(session, script)
+        passed = review.passed
+        score = review.quality_score
+        threshold = review.threshold
+        originality = review.originality_score
+        issues = list(review.issues or [])
+    print(f"Editorial score: {score} / threshold {threshold}")
+    print(f"Originality: {originality}")
+    print("Passed." if passed else "Rejected by the editorial threshold.")
+    for issue in issues:
+        print(f"- {issue.get('kind')}: {issue.get('detail')}")
+    return 0 if passed else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,16 +77,23 @@ def main(argv: list[str] | None = None) -> int:
     render.add_argument("--approve", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--export", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--reuse", action="store_true")
+    sub.add_parser("discover", help="Fetch configured public feeds and score topics. No video is rendered.")
+    review = sub.add_parser("review-script", help="Score one script for originality and unsupported claims.")
+    review.add_argument("--id", required=True)
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    configure_logging(get_settings().log_level)
+    if args.command == "discover":
+        return _discover()
+    if args.command == "review-script":
+        return _review(args.id)
     if args.export and not args.approve:
         print("Export only happens after approval. Use --approve or --no-export.")
         return 2
     if args.tts:
         os.environ["TTS_PROVIDER"] = args.tts
         get_settings.cache_clear()
-    configure_logging(get_settings().log_level)
     init_db()
     try:
         with session_scope() as session:

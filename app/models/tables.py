@@ -271,3 +271,78 @@ class AIResponseCache(Base):
     operation: Mapped[str] = mapped_column(String(80))
     response: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ResearchSource(Base):
+    """A configurable public feed. Discovery reads these. It does not render video."""
+
+    __tablename__ = "research_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(32), default="rss")
+    url: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(32), default="ai")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    etag: Mapped[str] = mapped_column(String(200), default="")
+    last_modified: Mapped[str] = mapped_column(String(120), default="")
+    body_sha256: Mapped[str] = mapped_column(String(64), default="")
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(32), default="idle")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DiscoveredItem(Base):
+    """A topic candidate. The feed summary is stored as a lead, not as a verified fact."""
+
+    __tablename__ = "discovered_items"
+    __table_args__ = (UniqueConstraint("source_id", "external_id", name="uq_discovery_source_external"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_id: Mapped[str] = mapped_column(ForeignKey("research_sources.id"))
+    external_id: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_kind: Mapped[str] = mapped_column(String(40), default="feed_summary")
+    url: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="ai")
+    keywords: Mapped[list] = mapped_column(JSON, default=list)
+    audience: Mapped[str] = mapped_column(String(160), default="")
+    horizon: Mapped[str] = mapped_column(String(16), default="unknown")
+    monetization_note: Mapped[str] = mapped_column(Text, default="")
+    source_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_status: Mapped[str] = mapped_column(String(40), default="")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    topic_id: Mapped[str | None] = mapped_column(ForeignKey("topics.id"), nullable=True)
+    duplicate_of_item_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    rejection_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EditorialReview(Base):
+    """Editorial plan and quality score for one script version."""
+
+    __tablename__ = "editorial_reviews"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    script_id: Mapped[str | None] = mapped_column(ForeignKey("scripts.id"), nullable=True, index=True)
+    script_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    topic_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    audience: Mapped[str] = mapped_column(Text, default="")
+    central_question: Mapped[str] = mapped_column(Text, default="")
+    takeaway: Mapped[str] = mapped_column(Text, default="")
+    opening: Mapped[str] = mapped_column(Text, default="")
+    narrative: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    quality_score: Mapped[int] = mapped_column(Integer, default=0)
+    originality_score: Mapped[int] = mapped_column(Integer, default=0)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    threshold: Mapped[int] = mapped_column(Integer, default=70)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
