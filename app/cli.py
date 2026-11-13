@@ -13,7 +13,8 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import PublishedPost, Script
+from app.models import Brand, PublishedPost, Script
+from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
 from app.services.research import review_script, run_discovery
@@ -36,6 +37,32 @@ def _discover() -> int:
     print("No video was rendered. Scores are editorial heuristics, not search volume.")
     if report["sources"] and len(report["failed_sources"]) == report["sources"]:
         return 1
+    return 0
+
+
+def _cycle(slug: str) -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        query = select(Brand).where(Brand.status != "paused")
+        if slug:
+            query = select(Brand).where(Brand.slug == slug)
+        brands = session.scalars(query).all()
+        if not brands:
+            print("No brand matched. Nothing was rendered or uploaded.")
+            return 1
+        for brand in brands:
+            run = run_brand_cycle(session, brand)
+            stats = run.stats or {}
+            print(
+                f"{brand.slug}: {run.status}. "
+                f"Opportunities {stats.get('opportunities_written', 0)}. "
+                f"Videos {stats.get('videos_rendered', 0)}. "
+                f"Uploads {stats.get('uploads', 0)}. "
+                f"Advertising revenue unavailable."
+            )
+            if run.error:
+                print(run.error)
     return 0
 
 
@@ -78,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     render.add_argument("--export", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--reuse", action="store_true")
     sub.add_parser("discover", help="Fetch configured public feeds and score topics. No video is rendered.")
+    cycle = sub.add_parser("run-cycle", help="Score one brand's feeds. Does not render or upload.")
+    cycle.add_argument("--slug", default="")
     review = sub.add_parser("review-script", help="Score one script for originality and unsupported claims.")
     review.add_argument("--id", required=True)
     args = parser.parse_args(argv)
@@ -86,6 +115,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(get_settings().log_level)
     if args.command == "discover":
         return _discover()
+    if args.command == "run-cycle":
+        return _cycle(args.slug)
     if args.command == "review-script":
         return _review(args.id)
     if args.export and not args.approve:

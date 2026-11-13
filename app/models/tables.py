@@ -346,3 +346,117 @@ class EditorialReview(Base):
     passed: Mapped[bool] = mapped_column(Boolean, default=False)
     threshold: Mapped[int] = mapped_column(Integer, default=70)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Brand(Base):
+    """An independent content brand. The niche lives on the row, not in application code."""
+
+    __tablename__ = "brands"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    niche: Mapped[str] = mapped_column(Text, default="")
+    audience: Mapped[str] = mapped_column(Text, default="")
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    identity: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="experimental")
+    publishing_mode: Mapped[str] = mapped_column(String(32), default="test")
+    daily_publish_limit: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class BrandSource(Base):
+    __tablename__ = "brand_sources"
+    __table_args__ = (UniqueConstraint("brand_id", "source_id", name="uq_brand_source"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"))
+    source_id: Mapped[str] = mapped_column(ForeignKey("research_sources.id"))
+
+
+class ContentOpportunity(Base):
+    """A scored idea. Missing factors stay null. The score is not rescaled to hide them."""
+
+    __tablename__ = "content_opportunities"
+    __table_args__ = (
+        UniqueConstraint("brand_id", "discovered_item_id", name="uq_brand_discovered_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    discovered_item_id: Mapped[str | None] = mapped_column(ForeignKey("discovered_items.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(300))
+    partial_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    coverage: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    weight_total: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    signals: Mapped[list] = mapped_column(JSON, default=list)
+    youtube_sample: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="evaluated")
+    hold_reason: Mapped[str] = mapped_column(Text, default="")
+    production_status: Mapped[str] = mapped_column(String(32), default="blocked")
+    production_block_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class AffiliateProgram(Base):
+    __tablename__ = "affiliate_programs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    provider: Mapped[str] = mapped_column(String(160), default="")
+    locale: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+    commission_type: Mapped[str] = mapped_column(String(40), default="")
+    commission_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    terms: Mapped[str] = mapped_column(Text, default="")
+    expires_on: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AffiliateProduct(Base):
+    __tablename__ = "affiliate_products"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    program_id: Mapped[str] = mapped_column(ForeignKey("affiliate_programs.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    category: Mapped[str] = mapped_column(String(80), default="")
+    product_url: Mapped[str] = mapped_column(Text, default="")
+    affiliate_url: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AffiliateClick(Base):
+    __tablename__ = "affiliate_clicks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_id: Mapped[str] = mapped_column(ForeignKey("affiliate_products.id"), index=True)
+    clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Sponsorship(Base):
+    __tablename__ = "sponsorships"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    sponsor_name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(32), default="lead")
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CycleRun(Base):
+    __tablename__ = "cycle_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

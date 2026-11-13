@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Business · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">Portfolio monitor</p>
+<h1>Business</h1>
+<p class="banner">Advertising revenue is unavailable. This page does not render a video and does not upload one. A partial score uses only factors that have a value. Missing factors stay unknown and are not scaled up.</p>
+<p>Spend this month ${{ "%.2f"|format(spend) }} of ${{ "%.2f"|format(cap) }}. Profit is unavailable because revenue is unavailable.</p>
+
+<form method="post" action="/business/cycle" class="inline">
+  <button type="submit">Run opportunity cycle</button>
+</form>
+
+<h2>Brands</h2>
+<table>
+  <tr><th>Brand</th><th>Niche</th><th>Mode</th><th>Status</th><th></th></tr>
+  {% for brand in brands %}
+  <tr>
+    <td>{{ brand.name }}<br><span class="muted">{{ brand.language }} · {{ brand.audience }}</span></td>
+    <td>{{ brand.niche }}</td>
+    <td>{{ brand.publishing_mode }} · daily limit {{ brand.daily_publish_limit }}<br>No platform account is connected.</td>
+    <td>{{ brand.status }}</td>
+    <td>
+      <form method="post" action="/business/brands/{{ brand.id }}/pause">
+        <button type="submit">{{ "Resume" if brand.status == "paused" else "Pause" }}</button>
+      </form>
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5">No brands yet.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Recent cycles</h2>
+<table>
+  <tr><th>Status</th><th>Result</th></tr>
+  {% for run in runs %}
+  <tr>
+    <td>{{ run.status }}</td>
+    <td>
+      Opportunities {{ run.stats.get("opportunities_written", 0) }}.
+      Videos {{ run.stats.get("videos_rendered", 0) }}.
+      Uploads {{ run.stats.get("uploads", 0) }}.
+      {% if run.error %}<br>{{ run.error }}{% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="2">No cycle has run.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Opportunities</h2>
+<table>
+  <tr><th>Title</th><th>Partial score</th><th>Coverage</th><th>Status</th></tr>
+  {% for item in opportunities %}
+  <tr>
+    <td>
+      {{ item.title }}
+      {% if item.hold_reason %}<br>{{ item.hold_reason }}{% endif %}
+      <br>{{ item.production_block_reason }}
+      {% if item.youtube_sample %}
+      <br>YouTube sample median views {{ item.youtube_sample.get("median_views") }} ({{ item.youtube_sample.get("sample_size") }}). {{ item.youtube_sample.get("note") }}
+      {% endif %}
+      <details>
+        <summary>Signals</summary>
+        <ul>
+          {% for signal in item.signals %}
+          <li>{{ signal.factor }}: {% if signal.value is none %}unknown{% else %}{{ signal.value }} ({{ signal.kind }}){% endif %} — {{ signal.note }}</li>
+          {% endfor %}
+        </ul>
+      </details>
+    </td>
+    <td>{% if item.partial_score is none %}unknown{% else %}{{ item.partial_score }}{% endif %}</td>
+    <td>{{ item.coverage }} of {{ item.weight_total }}</td>
+    <td>{{ item.status }} · {{ item.production_status }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No opportunities yet. Run the cycle.</td></tr>
+  {% endfor %}
+</table>
+
+{% for brand in brands %}
+<section class="card">
+  <h2>Affiliate program for {{ brand.name }}</h2>
+  <form method="post" action="/business/brands/{{ brand.id }}/programs">
+    <label>Name <input name="name" required></label>
+    <label>Provider <input name="provider"></label>
+    <label>Locale <input name="locale" placeholder="US"></label>
+    <label>Status
+      <select name="status">
+        <option value="draft">draft</option>
+        <option value="active">active</option>
+        <option value="paused">paused</option>
+      </select>
+    </label>
+    <label>Commission type <input name="commission_type" placeholder="percent"></label>
+    <label>Commission rate <input name="commission_rate" placeholder="Leave empty if you do not have the rate"></label>
+    <label>Terms <textarea name="terms" rows="2"></textarea></label>
+    <label>Expires <input name="expires_on" placeholder="YYYY-MM-DD"></label>
+    <button type="submit">Save program</button>
+  </form>
+  <h3>Sponsorship lead</h3>
+  <form method="post" action="/business/brands/{{ brand.id }}/sponsorships">
+    <label>Sponsor <input name="sponsor_name" required></label>
+    <label>Status
+      <select name="status">
+        <option value="lead">lead</option>
+        <option value="agreed">agreed</option>
+        <option value="declined">declined</option>
+      </select>
+    </label>
+    <label>Rate <input name="rate"></label>
+    <label>Notes <input name="notes"></label>
+    <button type="submit">Save sponsorship</button>
+  </form>
+</section>
+{% endfor %}
+
+<h2>Stored programs</h2>
+<table>
+  <tr><th>Program</th><th>Status</th><th>Rate</th><th>Disclosure</th></tr>
+  {% for program in programs %}
+  <tr>
+    <td>{{ program.name }} · {{ program.locale }}</td>
+    <td>{{ program.status }}</td>
+    <td>{% if program.commission_rate is none %}not stored{% else %}{{ program.commission_rate }} {{ program.commission_type }}{% endif %}</td>
+    <td>{{ disclosures[program.id] }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No programs entered.</td></tr>
+  {% endfor %}
+</table>
+
+{% for program in programs %}
+<form class="card" method="post" action="/business/programs/{{ program.id }}/products">
+  <h3>Product for {{ program.name }}</h3>
+  <label>Name <input name="name" required></label>
+  <label>Category <input name="category"></label>
+  <label>Product URL <input name="product_url" required placeholder="https://"></label>
+  <label>Affiliate URL <input name="affiliate_url" required placeholder="https://"></label>
+  <button type="submit">Save product</button>
+</form>
+{% endfor %}
+
+<h2>Products and clicks</h2>
+<table>
+  <tr><th>Product</th><th>Clicks</th><th>Link</th></tr>
+  {% for product in products %}
+  <tr>
+    <td>{{ product.name }}</td>
+    <td>{{ clicks.get(product.id, 0) }}</td>
+    <td><a href="/go/{{ product.id }}">Tracked redirect</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3">No products entered. Conversions are not measured.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Sponsorships</h2>
+<table>
+  <tr><th>Sponsor</th><th>Status</th><th>Rate</th></tr>
+  {% for item in sponsors %}
+  <tr>
+    <td>{{ item.sponsor_name }}</td>
+    <td>{{ item.status }}</td>
+    <td>{% if item.rate is none %}not stored{% else %}{{ item.rate }}{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3">No sponsorships. A blank list is not a pipeline of deals.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -117,10 +117,21 @@ def _remember_cache(source: ResearchSource, result: FetchResult, status: str) ->
         source.body_sha256 = result.body_sha256
 
 
-def run_discovery(session: Session, *, fetch=None) -> dict:
+def run_discovery(
+    session: Session,
+    *,
+    fetch=None,
+    source_ids: list[str] | None = None,
+    promote: bool = True,
+) -> dict:
     settings = get_settings()
     fetcher = fetch or (lambda source: fetch_source(source, settings))
-    sources = session.scalars(select(ResearchSource).where(ResearchSource.enabled.is_(True))).all()
+    query = select(ResearchSource)
+    if source_ids is None:
+        query = query.where(ResearchSource.enabled.is_(True))
+    else:
+        query = query.where(ResearchSource.id.in_(source_ids))
+    sources = session.scalars(query).all()
     created = 0
     duplicates = 0
     promoted = 0
@@ -223,7 +234,9 @@ def run_discovery(session: Session, *, fetch=None) -> dict:
             session.flush()
             known_ids.add(item.external_id)
             created += 1
-            if status == "scored" and not reason:
+            if not promote and status == "scored" and not reason:
+                item.rejection_reason = "Stored for a brand cycle. No topic was created."
+            elif status == "scored" and not reason:
                 try:
                     promote_item(session, item)
                     promoted += 1
