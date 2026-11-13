@@ -460,3 +460,51 @@ class CycleRun(Base):
     error: Mapped[str] = mapped_column(Text, default="")
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResearchDossier(Base):
+    """Text taken from the opportunity's source page. Quotations stay verbatim."""
+
+    __tablename__ = "research_dossiers"
+    __table_args__ = (UniqueConstraint("opportunity_id", name="uq_dossier_opportunity"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    opportunity_id: Mapped[str] = mapped_column(ForeignKey("content_opportunities.id"), index=True)
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    extracted_text: Mapped[str] = mapped_column(Text, default="")
+    quotations: Mapped[list] = mapped_column(JSON, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ProductionJob(Base):
+    """One attempt to turn an opportunity into a local video. Nothing here is published."""
+
+    __tablename__ = "production_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    opportunity_id: Mapped[str] = mapped_column(ForeignKey("content_opportunities.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    stage: Mapped[str] = mapped_column(String(40), default="select")
+    error: Mapped[str] = mapped_column(Text, default="")
+    script_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    video_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProductionCost(Base):
+    __tablename__ = "production_costs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("production_jobs.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    operation: Mapped[str] = mapped_column(String(80))
+    estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

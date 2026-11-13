@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     opportunity_weight_cost: float = 0.10
     opportunity_weight_evergreen: float = 0.05
 
+    # Local production. A zero cap blocks paid calls and still allows the local path.
+    production_video_cap_usd: float = 1.0
+    production_daily_cap_usd: float = 5.0
+    production_stock: str = "none"
+
     video_fps: int = Field(default=30)
 
     def openai_enabled(self) -> bool:

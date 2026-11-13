@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Production · {{ app_name }}{% endblock %}
+{% block body %}
+<p class="eyebrow">Local production</p>
+<h1>Production</h1>
+<p class="banner">Finished files stay on this machine. This page does not publish them. A video is ready only after the production checks pass.</p>
+<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Stock source: {{ settings.production_stock or "none" }}.</p>
+
+<h2>Opportunities</h2>
+<table>
+  <tr><th>Title</th><th>Brand</th><th>Score</th><th>Status</th></tr>
+  {% for item in opportunities %}
+  <tr>
+    <td>{{ item.title }}{% if item.hold_reason %}<br>{{ item.hold_reason }}{% endif %}</td>
+    <td>{{ brands[item.brand_id].name if item.brand_id in brands else item.brand_id }}</td>
+    <td>{% if item.partial_score is none %}unknown{% else %}{{ item.partial_score }}{% endif %}</td>
+    <td>{{ item.status }} · {{ item.production_status }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No opportunities yet. Run a brand cycle first.</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Jobs</h2>
+{% for job in jobs %}
+<article class="card">
+  <p><strong>{{ job.status }}</strong> · {{ job.stage }} · ${{ "%.4f"|format(job.cost_usd or 0) }}</p>
+  {% if job.error %}<p>{{ job.error }}</p>{% endif %}
+  {% set script = scripts.get(job.script_id) %}
+  {% if script %}<p>Script: {{ script.title }}</p>{% endif %}
+  {% if job.report and job.report.scenes %}
+  <ul>
+    {% for scene in job.report.scenes %}
+    <li>{{ scene.index }}. {{ scene.visual }} · {{ scene.on_screen_text }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if job.report and job.report.metadata %}
+  <p>{{ job.report.metadata.description }}</p>
+  {% endif %}
+  {% set video = videos.get(job.video_id) %}
+  {% if video and video.path %}
+  <p>File: {{ video.path }}</p>
+  <p>Status: {{ video.status }}. Published: no.</p>
+  {% if video.status == "ready" %}
+  <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
+  {% endif %}
+  {% endif %}
+</article>
+{% else %}
+<p>No production job has run.</p>
+{% endfor %}
+
+<h2>Costs</h2>
+<table>
+  <tr><th>Provider</th><th>Operation</th><th>Cost</th></tr>
+  {% for row in costs %}
+  <tr>
+    <td>{{ row.provider }}</td>
+    <td>{{ row.operation }}{% if row.cached %} · cached{% endif %}</td>
+    <td>${{ "%.4f"|format(row.estimated_cost_usd or 0) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3">No production costs recorded.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
