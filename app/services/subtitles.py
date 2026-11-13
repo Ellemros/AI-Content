@@ -74,10 +74,10 @@ def _wrap(chunk: str, width: int = 42) -> str:
     return f"{chunk[:split_at]}\n{chunk[split_at + 1 :]}"
 
 
-def time_cues(text: str, total_seconds: float) -> list[Cue]:
+def time_cues(text: str, total_seconds: float, max_chars: int = 84) -> list[Cue]:
     if total_seconds <= 0:
         raise ValueError("Duration must be positive.")
-    chunks = caption_chunks(text)
+    chunks = caption_chunks(text, max_chars=max_chars)
     if not chunks:
         raise ValueError("Narration is empty.")
     durations = _durations(chunks, total_seconds)

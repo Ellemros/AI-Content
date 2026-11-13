@@ -51,6 +51,30 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = False
     scheduler_poll_seconds: float = 30.0
 
+    # Content intelligence. Scores are heuristics. They are not search volume.
+    topic_score_minimum: int = 55
+    editorial_quality_minimum: int = 70
+    editorial_gate: bool = False
+    research_timeout_seconds: float = 8.0
+    research_max_items: int = 8
+    research_verify_limit: int = 8
+
+    # 0 keeps the brand cycle off unless a command or a server sets a poll interval.
+    brand_cycle_poll_seconds: int = 0
+    youtube_api_key: str = ""
+    opportunity_weight_monetization: float = 0.25
+    opportunity_weight_demand: float = 0.20
+    opportunity_weight_competition: float = 0.15
+    opportunity_weight_scalability: float = 0.15
+    opportunity_weight_affiliate: float = 0.10
+    opportunity_weight_cost: float = 0.10
+    opportunity_weight_evergreen: float = 0.05
+
+    # Local production. A zero cap blocks paid calls and still allows the local path.
+    production_video_cap_usd: float = 1.0
+    production_daily_cap_usd: float = 5.0
+    production_stock: str = "none"
+
     video_fps: int = Field(default=30)
 
     def openai_enabled(self) -> bool:

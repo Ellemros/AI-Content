@@ -325,3 +325,240 @@ class AIResponseCache(Base):
     operation: Mapped[str] = mapped_column(String(80))
     response: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ResearchSource(Base):
+    """A configurable public feed. Discovery reads these. It does not render video."""
+
+    __tablename__ = "research_sources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(32), default="rss")
+    url: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(32), default="ai")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    etag: Mapped[str] = mapped_column(String(200), default="")
+    last_modified: Mapped[str] = mapped_column(String(120), default="")
+    body_sha256: Mapped[str] = mapped_column(String(64), default="")
+    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(32), default="idle")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class DiscoveredItem(Base):
+    """A topic candidate. The feed summary is stored as a lead, not as a verified fact."""
+
+    __tablename__ = "discovered_items"
+    __table_args__ = (UniqueConstraint("source_id", "external_id", name="uq_discovery_source_external"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_id: Mapped[str] = mapped_column(ForeignKey("research_sources.id"))
+    external_id: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_kind: Mapped[str] = mapped_column(String(40), default="feed_summary")
+    url: Mapped[str] = mapped_column(Text, default="")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    category: Mapped[str] = mapped_column(String(32), default="ai")
+    keywords: Mapped[list] = mapped_column(JSON, default=list)
+    audience: Mapped[str] = mapped_column(String(160), default="")
+    horizon: Mapped[str] = mapped_column(String(16), default="unknown")
+    monetization_note: Mapped[str] = mapped_column(Text, default="")
+    source_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_status: Mapped[str] = mapped_column(String(40), default="")
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="new", index=True)
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    score_breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    topic_id: Mapped[str | None] = mapped_column(ForeignKey("topics.id"), nullable=True)
+    duplicate_of_item_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    rejection_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class EditorialReview(Base):
+    """Editorial plan and quality score for one script version."""
+
+    __tablename__ = "editorial_reviews"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    script_id: Mapped[str | None] = mapped_column(ForeignKey("scripts.id"), nullable=True, index=True)
+    script_version_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    topic_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    audience: Mapped[str] = mapped_column(Text, default="")
+    central_question: Mapped[str] = mapped_column(Text, default="")
+    takeaway: Mapped[str] = mapped_column(Text, default="")
+    opening: Mapped[str] = mapped_column(Text, default="")
+    narrative: Mapped[list] = mapped_column(JSON, default=list)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    conclusion: Mapped[str] = mapped_column(Text, default="")
+    quality_score: Mapped[int] = mapped_column(Integer, default=0)
+    originality_score: Mapped[int] = mapped_column(Integer, default=0)
+    issues: Mapped[list] = mapped_column(JSON, default=list)
+    passed: Mapped[bool] = mapped_column(Boolean, default=False)
+    threshold: Mapped[int] = mapped_column(Integer, default=70)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Brand(Base):
+    """An independent content brand. The niche lives on the row, not in application code."""
+
+    __tablename__ = "brands"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(80), unique=True)
+    name: Mapped[str] = mapped_column(String(160))
+    niche: Mapped[str] = mapped_column(Text, default="")
+    audience: Mapped[str] = mapped_column(Text, default="")
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    identity: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="experimental")
+    publishing_mode: Mapped[str] = mapped_column(String(32), default="test")
+    daily_publish_limit: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class BrandSource(Base):
+    __tablename__ = "brand_sources"
+    __table_args__ = (UniqueConstraint("brand_id", "source_id", name="uq_brand_source"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"))
+    source_id: Mapped[str] = mapped_column(ForeignKey("research_sources.id"))
+
+
+class ContentOpportunity(Base):
+    """A scored idea. Missing factors stay null. The score is not rescaled to hide them."""
+
+    __tablename__ = "content_opportunities"
+    __table_args__ = (
+        UniqueConstraint("brand_id", "discovered_item_id", name="uq_brand_discovered_item"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    discovered_item_id: Mapped[str | None] = mapped_column(ForeignKey("discovered_items.id"), nullable=True)
+    title: Mapped[str] = mapped_column(String(300))
+    partial_score: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
+    coverage: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    weight_total: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    signals: Mapped[list] = mapped_column(JSON, default=list)
+    youtube_sample: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="evaluated")
+    hold_reason: Mapped[str] = mapped_column(Text, default="")
+    production_status: Mapped[str] = mapped_column(String(32), default="blocked")
+    production_block_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class AffiliateProgram(Base):
+    __tablename__ = "affiliate_programs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    provider: Mapped[str] = mapped_column(String(160), default="")
+    locale: Mapped[str] = mapped_column(String(16), default="")
+    status: Mapped[str] = mapped_column(String(32), default="draft")
+    commission_type: Mapped[str] = mapped_column(String(40), default="")
+    commission_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), nullable=True)
+    terms: Mapped[str] = mapped_column(Text, default="")
+    expires_on: Mapped[str] = mapped_column(String(32), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AffiliateProduct(Base):
+    __tablename__ = "affiliate_products"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    program_id: Mapped[str] = mapped_column(ForeignKey("affiliate_programs.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    category: Mapped[str] = mapped_column(String(80), default="")
+    product_url: Mapped[str] = mapped_column(Text, default="")
+    affiliate_url: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AffiliateClick(Base):
+    __tablename__ = "affiliate_clicks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    product_id: Mapped[str] = mapped_column(ForeignKey("affiliate_products.id"), index=True)
+    clicked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Sponsorship(Base):
+    __tablename__ = "sponsorships"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    sponsor_name: Mapped[str] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(32), default="lead")
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class CycleRun(Base):
+    __tablename__ = "cycle_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    error: Mapped[str] = mapped_column(Text, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ResearchDossier(Base):
+    """Text taken from the opportunity's source page. Quotations stay verbatim."""
+
+    __tablename__ = "research_dossiers"
+    __table_args__ = (UniqueConstraint("opportunity_id", name="uq_dossier_opportunity"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    opportunity_id: Mapped[str] = mapped_column(ForeignKey("content_opportunities.id"), index=True)
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(String(300), default="")
+    extracted_text: Mapped[str] = mapped_column(Text, default="")
+    quotations: Mapped[list] = mapped_column(JSON, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ProductionJob(Base):
+    """One attempt to turn an opportunity into a local video. Nothing here is published."""
+
+    __tablename__ = "production_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
+    opportunity_id: Mapped[str] = mapped_column(ForeignKey("content_opportunities.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="running")
+    stage: Mapped[str] = mapped_column(String(40), default="select")
+    error: Mapped[str] = mapped_column(Text, default="")
+    script_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    video_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    report: Mapped[dict] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProductionCost(Base):
+    __tablename__ = "production_costs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    job_id: Mapped[str] = mapped_column(ForeignKey("production_jobs.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    operation: Mapped[str] = mapped_column(String(80))
+    estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

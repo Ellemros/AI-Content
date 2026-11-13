@@ -15,6 +15,7 @@ from app.models import Job, Script, Topic, Video
 from app.schemas.content import TopicCreate
 from app.services.cost import usage_scope
 from app.services.publisher import record_export
+from app.services.research.editorial import review_script
 from app.services.scripts import current_version, generate_script
 from app.services.topics import create_topic
 from app.services.video import render_video
@@ -23,6 +24,17 @@ from app.services.voice import default_voice, plan_engine, voice_hash
 logger = logging.getLogger(__name__)
 _inflight: set[str] = set()
 _guard = threading.Lock()
+
+
+def _require_editorial(session: Session, script: Script) -> None:
+    review = review_script(session, script)
+    if review.passed:
+        return
+    kinds = ", ".join(str(issue.get("kind", "")) for issue in (review.issues or [])[:6]) or "below threshold"
+    raise QualityGateError(
+        f"Editorial score {review.quality_score} is below {review.threshold} ({kinds}). "
+        "The video was not rendered."
+    )
 
 
 def enqueue(
@@ -64,6 +76,8 @@ def enqueue(
         and existing_video is not None
     ):
         return existing_video, False
+    if settings.editorial_gate:
+        _require_editorial(session, script)
     if existing_video is None:
         video = Video(
             script_id=script.id,

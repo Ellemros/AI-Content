@@ -1,14 +1,26 @@
-"""Schedule, library, and subtitle controls."""
+"""Scheduler, library, subtitles, and the topic-specific production monitor."""
 
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.core.database import get_db
-from app.core.errors import AppError
-from app.models import Job, ProductionSchedule, Script, Topic, Video
+from app.core.errors import AppError, NotFoundError
+from app.models import (
+    Brand,
+    ContentOpportunity,
+    Job,
+    ProductionCost,
+    ProductionJob,
+    ProductionSchedule,
+    Script,
+    Topic,
+    Video,
+)
 from app.services.assets import attach_scene_asset, library_assets, register_library_asset
 from app.services.cost import month_spend, video_cost_rows
 from app.services.pipeline import enqueue, launch
@@ -31,28 +43,69 @@ def _schedule(session: Session, schedule_id: str) -> ProductionSchedule:
     return row
 
 
+def _under_data(path: Path) -> Path:
+    root = get_settings().data_dir.resolve()
+    resolved = path.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise NotFoundError("That file is outside the data directory.")
+    return resolved
+
+
 @router.get("/production")
 def production_page(request: Request, session: Session = Depends(get_db)):
     schedules = session.scalars(select(ProductionSchedule).order_by(ProductionSchedule.name)).all()
     topics = session.scalars(select(Topic).order_by(Topic.created_at.desc())).all()
-    jobs = session.scalars(
+    render_jobs = session.scalars(
         select(Job)
         .where(Job.status.in_(["running", "failed", "interrupted"]))
         .order_by(Job.updated_at.desc())
         .limit(30)
     ).all()
-    costs, unassigned = video_cost_rows(session)
+    video_costs, unassigned = video_cost_rows(session)
+    brands = {row.id: row for row in session.scalars(select(Brand)).all()}
+    opportunities = session.scalars(
+        select(ContentOpportunity).order_by(ContentOpportunity.updated_at.desc())
+    ).all()
+    pipeline_jobs = session.scalars(select(ProductionJob).order_by(ProductionJob.started_at.desc())).all()
+    script_ids = [job.script_id for job in pipeline_jobs if job.script_id]
+    video_ids = [job.video_id for job in pipeline_jobs if job.video_id]
+    scripts = {}
+    videos = {}
+    if script_ids:
+        found = session.scalars(select(Script).where(Script.id.in_(script_ids))).all()
+        scripts = {row.id: row for row in found}
+    if video_ids:
+        videos = {row.id: row for row in session.scalars(select(Video).where(Video.id.in_(video_ids))).all()}
+    pipeline_costs = session.scalars(select(ProductionCost).order_by(ProductionCost.created_at.desc())).all()
     return _render(
         request,
         "production.html",
         schedules=schedules,
         topics=topics,
-        jobs=jobs,
-        costs=costs,
+        render_jobs=render_jobs,
+        video_costs=video_costs,
         unassigned=float(unassigned),
         spend=float(month_spend(session)),
         poller_on=scheduler_enabled(session),
+        brands=brands,
+        opportunities=opportunities[:40],
+        pipeline_jobs=pipeline_jobs[:20],
+        pipeline_costs=pipeline_costs[:40],
+        scripts=scripts,
+        videos=videos,
+        settings=get_settings(),
     )
+
+
+@router.get("/production/videos/{video_id}")
+def production_video(video_id: str, session: Session = Depends(get_db)):
+    video = session.get(Video, video_id)
+    if video is None or not video.path:
+        raise NotFoundError("Video was not found.")
+    path = _under_data(Path(video.path))
+    if not path.is_file():
+        raise NotFoundError("Video file is missing.")
+    return FileResponse(path, media_type="video/mp4", filename=path.name)
 
 
 @router.post("/production/scheduler")

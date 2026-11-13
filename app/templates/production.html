@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Production · {{ app_name }}{% endblock %}
 {% block body %}
-<p class="eyebrow">Scheduler</p>
+<p class="eyebrow">Scheduler and pipeline</p>
 <h1>Production</h1>
-<p>A due schedule runs topic, script, voice, and render, then stops. Approval and export stay on the video page. Nothing is uploaded.</p>
+<p>A due schedule runs topic, script, voice, and render, then stops for approval. The opportunity pipeline writes a local vertical video and does not publish it.</p>
 <section class="split">
   <article>
     <h2>Poller {{ "on" if poller_on else "off" }}</h2>
@@ -65,10 +65,10 @@
 </form>
 
 <h2>Jobs that need attention</h2>
-{% if jobs %}
+{% if render_jobs %}
 <table>
   <tr><th>Status</th><th>Stage</th><th>Attempt</th><th>Error</th><th></th></tr>
-  {% for job in jobs %}
+  {% for job in render_jobs %}
   <tr>
     <td>{{ job.status }}</td>
     <td>{{ job.stage }} · {{ job.progress }}%</td>
@@ -83,10 +83,10 @@
 {% endif %}
 
 <h2>Cost per video this month</h2>
-{% if costs %}
+{% if video_costs %}
 <table>
   <tr><th>Video</th><th>Status</th><th>USD</th></tr>
-  {% for row in costs %}
+  {% for row in video_costs %}
   <tr>
     <td><a href="/videos/{{ row.video.id }}">{{ row.video.language }} · {{ row.video.status }}</a></td>
     <td>{{ row.video.status }}</td>
@@ -97,4 +97,64 @@
 {% else %}
 <p>No videos to attribute this month. The month total above is still the cap.</p>
 {% endif %}
+
+<h2>Opportunity pipeline</h2>
+<p class="banner">Finished files stay on this machine. This page does not publish them. A video is ready only after the production checks pass.</p>
+<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Stock source: {{ settings.production_stock or "none" }}.</p>
+<table>
+  <tr><th>Title</th><th>Brand</th><th>Score</th><th>Status</th></tr>
+  {% for item in opportunities %}
+  <tr>
+    <td>{{ item.title }}{% if item.hold_reason %}<br>{{ item.hold_reason }}{% endif %}</td>
+    <td>{{ brands[item.brand_id].name if item.brand_id in brands else item.brand_id }}</td>
+    <td>{% if item.partial_score is none %}unknown{% else %}{{ item.partial_score }}{% endif %}</td>
+    <td>{{ item.status }} · {{ item.production_status }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="4">No opportunities yet. Run a brand cycle first.</td></tr>
+  {% endfor %}
+</table>
+
+{% for job in pipeline_jobs %}
+<article class="card">
+  <p><strong>{{ job.status }}</strong> · {{ job.stage }} · ${{ "%.4f"|format(job.cost_usd or 0) }}</p>
+  {% if job.error %}<p>{{ job.error }}</p>{% endif %}
+  {% set script = scripts.get(job.script_id) %}
+  {% if script %}<p>Script: {{ script.title }}</p>{% endif %}
+  {% if job.report and job.report.scenes %}
+  <ul>
+    {% for scene in job.report.scenes %}
+    <li>{{ scene.index }}. {{ scene.visual }} · {{ scene.on_screen_text }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if job.report and job.report.metadata %}
+  <p>{{ job.report.metadata.description }}</p>
+  {% endif %}
+  {% set video = videos.get(job.video_id) %}
+  {% if video and video.path %}
+  <p>File: {{ video.path }}</p>
+  <p>Status: {{ video.status }}. Published: no.</p>
+  {% if video.status == "ready" %}
+  <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
+  {% endif %}
+  {% endif %}
+</article>
+{% else %}
+<p>No production job has run.</p>
+{% endfor %}
+
+<h2>Pipeline costs</h2>
+<table>
+  <tr><th>Provider</th><th>Operation</th><th>Cost</th></tr>
+  {% for row in pipeline_costs %}
+  <tr>
+    <td>{{ row.provider }}</td>
+    <td>{{ row.operation }}{% if row.cached %} · cached{% endif %}</td>
+    <td>${{ "%.4f"|format(row.estimated_cost_usd or 0) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3">No production costs recorded.</td></tr>
+  {% endfor %}
+</table>
 {% endblock %}
