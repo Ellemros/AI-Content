@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.core.database import get_db
 from app.core.errors import AppError, NotFoundError
 from app.models import (
+    Asset,
     Brand,
     ContentOpportunity,
     Job,
@@ -39,6 +40,7 @@ from app.services.automation import (
 from app.services.cost import month_spend, video_cost_rows
 from app.services.pipeline import enqueue, launch
 from app.services.production.budget import daily_spend, monthly_spend
+from app.services.production.footage import list_stock, register_stock_clip
 from app.services.schedule import (
     create_schedule,
     launch_schedule,
@@ -127,12 +129,61 @@ def production_page(request: Request, session: Session = Depends(get_db)):
         automation_on=automation_enabled(session),
         production_daily=daily_spend(session),
         production_month=monthly_spend(session),
+        stock_assets=list_stock(session),
         titles={
             job.opportunity_id: opportunity_title(session, job.opportunity_id)
             for job in pipeline_jobs
             if job.opportunity_id
         },
     )
+
+
+@router.post("/production/stock")
+async def production_stock_create(
+    name: str = Form(""),
+    source: str = Form(...),
+    license_name: str = Form(...),
+    tags: str = Form(""),
+    category: str = Form(""),
+    creator: str = Form(""),
+    source_url: str = Form(""),
+    license_url: str = Form(""),
+    commercial_use: str = Form(""),
+    upload: UploadFile = File(...),
+    session: Session = Depends(get_db),
+):
+    data = await upload.read()
+    try:
+        register_stock_clip(
+            session,
+            name=name,
+            source=source,
+            license_name=license_name,
+            filename=upload.filename or "",
+            data=data,
+            tags=tags,
+            category=category,
+            creator=creator,
+            source_url=source_url,
+            license_url=license_url,
+            commercial_use="permitted" if commercial_use == "permitted" else "not_recorded",
+        )
+    except AppError as exc:
+        return _redirect("/production", error=exc.message)
+    note = "Clip registered. It is used only when the license is permitted and a tag matches."
+    return _redirect("/production", message=note)
+
+
+@router.get("/production/stock/{asset_id}")
+def production_stock_file(asset_id: str, session: Session = Depends(get_db)):
+    asset = session.get(Asset, asset_id)
+    if asset is None or asset.kind != "clip" or asset.source not in {"local-stock", "pexels"}:
+        raise NotFoundError("Clip was not found.")
+    path = _under_data(Path(asset.path))
+    if not path.is_file():
+        raise NotFoundError("Clip file is missing.")
+    media = "video/quicktime" if path.suffix.lower() == ".mov" else "video/mp4"
+    return FileResponse(path, media_type=media, filename=path.name)
 
 
 @router.get("/production/videos/{video_id}")

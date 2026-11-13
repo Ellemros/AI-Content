@@ -313,6 +313,8 @@ def test_produce_next_writes_a_vertical_mp4(db):
     assert "script" in job.report["fallbacks"]
     assert "voice" in job.report["fallbacks"]
     assert "footage" in job.report["fallbacks"]
+    assert job.report["visual_provider"] == "missing-footage"
+    assert all(scene["footage"]["status"] == "missing" for scene in job.report["scenes"])
     assert "openai" not in job.report["providers"]
     assert "dossier" in job.report["providers"]
     assert "espeak" in job.report["providers"]

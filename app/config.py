@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     production_video_cap_usd: float = 1.0
     production_daily_cap_usd: float = 5.0
     production_stock: str = "none"
+    # local uses the licensed library. pexels stays off unless this is set to pexels and a key exists.
+    production_footage: str = "local"
     pexels_api_key: str = ""
 
     video_fps: int = Field(default=30)
