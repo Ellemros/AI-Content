@@ -18,7 +18,6 @@ from app.core.time import utc_now
 from app.domain import CATEGORIES, LANGUAGES
 from app.models import (
     APIUsage,
-    Asset,
     Brand,
     ContentOpportunity,
     DiscoveredItem,
@@ -41,10 +40,17 @@ from app.services.production.budget import add_cost, assert_production_budget
 from app.services.production.checks import assess_production
 from app.services.production.extract import extract_article, quotations_from
 from app.services.production.film import durations_for, render_film, write_subtitles
-from app.services.production.illustrate import brand_palette, draw_scene
+from app.services.production.footage import (
+    choose_clip,
+    footage_record,
+    mark_used,
+    missing_record,
+    pexels_enabled,
+    recent_clip_ids,
+    write_missing_slate,
+)
 from app.services.production.scripting import narration_from_source, plan_scenes
 from app.services.production.speech import speakable
-from app.services.production.stock import search_commons
 from app.services.research.editorial import review_script
 from app.services.textutil import jaccard
 from app.services.topics import create_topic
@@ -354,7 +360,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     work = get_settings().data_dir / "production" / job.id
     work.mkdir(parents=True, exist_ok=True)
     job.stage = "visuals"
-    images, asset_ids, stock_used, kinds, clip_ids = _visuals(session, job, brand, scenes, work, stock_client)
+    images, asset_ids, kinds, clip_ids = _visuals(session, job, scenes, work)
     job.stage = "render"
     durations = durations_for(scenes, audio.duration_seconds)
     srt_path = work / "captions.srt"
@@ -419,20 +425,14 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         clip_ids=clip_ids,
     )
     video.quality_report = report
-    visual_provider = "pexels" if "clip" in kinds and "image" not in kinds else "illustrated-fallback"
-    if "clip" in kinds and "image" in kinds:
-        visual_provider = "pexels+illustrated-fallback"
-    if stock_used and visual_provider == "illustrated-fallback":
-        visual_provider = "wikimedia-commons"
+    visual_provider = _visual_provider(kinds, scenes)
     providers = [draft["provider"], audio.provider, visual_provider, "ffmpeg"]
-    if stock_used and "wikimedia-commons" not in providers:
-        providers.append("wikimedia-commons")
     fallbacks = []
     if draft.get("script_mode") != "original":
         fallbacks.append("script")
     if audio.provider != "elevenlabs":
         fallbacks.append("voice")
-    if "image" in kinds:
+    if any(kind != "clip" for kind in kinds):
         fallbacks.append("footage")
     metadata = {
         "title": version.title,
@@ -458,6 +458,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "voice_name": audio.voice_id,
         "visual_provider": visual_provider,
         "unique_clips": len({item for item in clip_ids if item}),
+        "clips": [scene.get("footage") for scene in scenes if isinstance(scene.get("footage"), dict)],
         "fallbacks": fallbacks,
         "quality_status": quality_status,
         "warnings": report.get("warnings") or [],
@@ -716,19 +717,27 @@ def _brand_voice(brand: Brand, language: str) -> str:
     return settings.elevenlabs_default_voice_id.strip()
 
 
-def _recent_pexels_ids(session: Session) -> set[str]:
-    rows = session.scalars(
-        select(Asset).where(Asset.source == "pexels").order_by(Asset.created_at.desc()).limit(80)
-    ).all()
-    found: set[str] = set()
-    for row in rows:
-        identity = str((row.metadata_json or {}).get("pexels_id") or "")
-        if identity:
-            found.add(identity)
-    return found
+def _visual_provider(kinds: list[str], scenes: list[dict]) -> str:
+    sources = {
+        str((scene.get("footage") or {}).get("source") or "")
+        for scene in scenes
+        if (scene.get("footage") or {}).get("status") == "matched"
+    }
+    sources.discard("")
+    if kinds and all(kind == "clip" for kind in kinds):
+        if sources == {"local-stock"}:
+            return "local-stock"
+        if sources == {"pexels"}:
+            return "pexels"
+        if sources:
+            return "+".join(sorted(sources))
+        return "local-stock"
+    if "clip" in kinds:
+        return "local-stock+missing-footage"
+    return "missing-footage"
 
 
-def _try_pexels_clip(session, job, scene, client, used: set[str], recent: set[str]):
+def _try_pexels_clip(session, job, scene, client, used_ids: set[str]):
     queries = []
     primary = str(scene.get("visual_query") or "").strip()
     if primary:
@@ -736,15 +745,12 @@ def _try_pexels_clip(session, job, scene, client, used: set[str], recent: set[st
     motifs = " ".join(scene.get("motifs") or [])[:80].strip()
     if motifs and motifs not in queries:
         queries.append(motifs)
-    label = str(scene.get("on_screen_text") or "").strip()
-    if label and label not in queries:
-        queries.append(label)
     for query in queries:
         try:
             videos = pexels_api.search_videos(query, client=client)
         except (AppError, httpx.HTTPError):
             continue
-        picked = pexels_api.pick_video(videos, used_ids=used, recent_ids=recent)
+        picked = pexels_api.pick_video(videos, used_ids=used_ids, recent_ids=set())
         if picked is None:
             continue
         link = str((picked.get("file") or {}).get("link") or "")
@@ -767,96 +773,75 @@ def _try_pexels_clip(session, job, scene, client, used: set[str], recent: set[st
                 "license": picked.get("license") or "",
                 "file_url": link,
                 "query": query,
+                "tags": query.split(),
             },
             name=f"pexels-{picked['id']}",
         )
         add_cost(session, job, provider="pexels", operation="footage", cost=0)
-        return dest, picked["id"], asset.id
+        used_ids.add(picked["id"])
+        return asset
     return None
 
 
-def _visuals(session, job, brand, scenes, work: Path, stock_client):
-    palette = brand_palette(brand)
-    photo = None
-    credit = ""
-    stock_used = False
-    if stock_client is not None and get_settings().production_stock.strip().lower() == "wikimedia":
-        query = " ".join(scenes[0].get("motifs") or [])
-        try:
-            found = search_commons(query, client=stock_client)
-        except httpx.HTTPError:
-            found = None
-        if found is not None:
-            image_bytes = stock_client.get(found["url"])
-            image_bytes.raise_for_status()
-            photo_path = work / "stock.jpg"
-            photo_path.write_bytes(image_bytes.content)
-            from PIL import Image
+def _remember_clip(scene, asset, images, asset_ids, kinds, clip_ids) -> None:
+    scene["footage"] = footage_record(asset)
+    images.append(Path(asset.path))
+    asset_ids.append(asset.id)
+    kinds.append("clip")
+    clip_ids.append(asset.id)
 
-            photo = Image.open(photo_path)
-            credit = f"{found['license']} · {found['artist']}"[:90]
-            stock_used = True
-            store_asset(
-                session,
-                kind="still",
-                path=photo_path,
-                source="wikimedia-commons",
-                license_name=found["license"][:80],
-                metadata={"title": found["title"], "page": found["url"], "artist": found["artist"]},
-            )
+
+def _remember_gap(scene, work: Path, images, asset_ids, kinds, clip_ids, session) -> None:
+    scene["footage"] = missing_record()
+    path = work / f"scene-{scene['index']}-missing.png"
+    write_missing_slate(path, int(scene["index"]))
+    asset = store_asset(
+        session,
+        kind="scene",
+        path=path,
+        source="missing-footage",
+        license_name="none",
+        metadata={"fallback": "missing-footage", "scene": scene["index"]},
+    )
+    images.append(path)
+    asset_ids.append(asset.id)
+    kinds.append("missing")
+    clip_ids.append("")
+
+
+def _visuals(session, job, scenes, work: Path):
     images: list[Path] = []
     asset_ids: list[str] = []
     kinds: list[str] = []
     clip_ids: list[str] = []
-    owned = None
-    pexels_client = None
-    if get_settings().pexels_api_key.strip():
-        owned = httpx.Client(timeout=30, follow_redirects=True)
-        pexels_client = owned
     used: set[str] = set()
-    recent = _recent_pexels_ids(session) if pexels_client is not None else set()
+    recent = recent_clip_ids(session)
+    pexels_ids: set[str] = set()
+    owned = None
+    client = None
+    if pexels_enabled():
+        owned = httpx.Client(timeout=30, follow_redirects=True)
+        client = owned
+    local_used = False
     try:
         for scene in scenes:
-            clip = None
-            if pexels_client is not None:
-                clip = _try_pexels_clip(session, job, scene, pexels_client, used, recent)
-            if clip is not None:
-                path, clip_id, asset_id = clip
-                images.append(path)
-                asset_ids.append(asset_id)
-                kinds.append("clip")
-                clip_ids.append(clip_id)
-                used.add(clip_id)
+            asset = choose_clip(session, scene, used=used, recent=recent)
+            if asset is not None:
+                mark_used(session, asset)
+                used.add(asset.id)
+                local_used = True
+                _remember_clip(scene, asset, images, asset_ids, kinds, clip_ids)
                 continue
-            path = work / f"scene-{scene['index']}.png"
-            draw_scene(
-                path,
-                kind=scene["visual"],
-                motifs=scene["motifs"],
-                palette=palette,
-                photo=photo if scene["index"] == 1 else None,
-                credit=credit if scene["index"] == 1 else "",
-            )
-            asset = store_asset(
-                session,
-                kind="scene",
-                path=path,
-                source="pillow",
-                license_name="original",
-                metadata={
-                    "visual": scene["visual"],
-                    "motifs": scene["motifs"],
-                    "original": True,
-                    "fallback": True,
-                },
-            )
-            images.append(path)
-            asset_ids.append(asset.id)
-            kinds.append("image")
-            clip_ids.append("")
+            if client is not None:
+                fetched = _try_pexels_clip(session, job, scene, client, pexels_ids)
+                if fetched is not None:
+                    used.add(fetched.id)
+                    _remember_clip(scene, fetched, images, asset_ids, kinds, clip_ids)
+                    continue
+            _remember_gap(scene, work, images, asset_ids, kinds, clip_ids, session)
     finally:
         if owned is not None:
             owned.close()
-    if "image" in kinds:
-        add_cost(session, job, provider="pillow", operation="illustrate", cost=0)
-    return images, asset_ids, stock_used, kinds, clip_ids
+    if local_used:
+        add_cost(session, job, provider="local-stock", operation="footage", cost=0)
+    return images, asset_ids, kinds, clip_ids

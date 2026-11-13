@@ -121,6 +121,7 @@ def assess_production(
     checks.append(_check("visual_motion", moved, moved_detail))
     kinds = visual_kinds or []
     clip_count = sum(1 for kind in kinds if kind == "clip")
+    missing = sum(1 for kind in kinds if kind != "clip")
     unique_ids = {item for item in (clip_ids or []) if item}
     footage_ok = (
         bool(kinds)
@@ -130,15 +131,16 @@ def assess_production(
     )
     if not kinds:
         footage_detail = "Visual kind was not recorded."
-    elif clip_count < len(kinds):
+    elif missing:
         footage_detail = (
-            f"{clip_count} of {len(kinds)} scenes use footage. "
-            "Illustrated scenes are a fallback, not finished footage."
+            f"{clip_count} of {len(kinds)} scenes have a licensed clip. "
+            f"{missing} scenes have no relevant licensed footage. "
+            "No unrelated clip was inserted."
         )
-    elif len(unique_ids) < min(4, len(kinds)):
-        footage_detail = f"Only {len(unique_ids)} distinct clips were used."
+    elif len(unique_ids) != clip_count:
+        footage_detail = "A licensed clip was repeated. That is not full coverage."
     else:
-        footage_detail = f"{len(unique_ids)} distinct footage clips."
+        footage_detail = f"{len(unique_ids)} distinct licensed clips."
     checks.append(_check("footage_coverage", footage_ok, footage_detail, required=False))
     original = script_mode == "original"
     checks.append(

@@ -231,7 +231,49 @@
 
 <h2>Opportunity pipeline</h2>
 <p class="banner">Finished files stay on this machine. This page does not publish them. A video is ready only after the production checks pass.</p>
-<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Stock source: {{ settings.production_stock or "none" }}.</p>
+<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Footage: {{ settings.production_footage or "local" }}.</p>
+
+<h2>Licensed footage</h2>
+<p>Upload a clip only when you can name the source and the license. Checking commercial use means that permission is already recorded. A local file is not a license by itself. Clips without that check stay in the library and are not used.</p>
+{% if stock_assets %}
+<table>
+  <tr><th>Clip</th><th>Source</th><th>License</th><th>Tags</th><th>Eligible</th><th>Uses</th><th>Preview</th></tr>
+  {% for asset in stock_assets %}
+  {% set meta = asset.metadata_json or {} %}
+  <tr>
+    <td>{{ meta.filename or asset.name }}<br><span class="muted">{{ meta.category }} · {{ meta.orientation }} · {{ meta.width }}×{{ meta.height }}</span></td>
+    <td>{{ asset.source }}{% if meta.creator %}<br>{{ meta.creator }}{% endif %}{% if meta.source_url %}<br>{{ meta.source_url }}{% endif %}</td>
+    <td>{{ asset.license }}{% if meta.license_url %}<br>{{ meta.license_url }}{% endif %}</td>
+    <td>{{ meta.tags | join(", ") if meta.tags else "" }}</td>
+    <td>{% if meta.commercial_use == "permitted" or asset.source == "pexels" %}yes{% else %}no{% endif %}</td>
+    <td>{{ meta.use_count or 0 }}</td>
+    <td><video controls preload="metadata" src="/production/stock/{{ asset.id }}" width="120"></video></td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No licensed clips yet. A production run without a matching clip is needs_review.</p>
+{% endif %}
+<form method="post" action="/production/stock" enctype="multipart/form-data" class="card">
+  <h3>Register a clip</h3>
+  <div class="row">
+    <label>Name <input name="name" placeholder="Battery close-up"></label>
+    <label>File <input type="file" name="upload" accept="video/mp4,video/quicktime,video/webm" required></label>
+    <label>Category <input name="category" placeholder="workshop"></label>
+  </div>
+  <div class="row">
+    <label>Source <input name="source" required placeholder="Where this file came from"></label>
+    <label>Source URL <input name="source_url" placeholder="https://"></label>
+    <label>Creator <input name="creator"></label>
+  </div>
+  <div class="row">
+    <label>License <input name="license_name" required placeholder="License name"></label>
+    <label>License URL <input name="license_url" placeholder="https://"></label>
+    <label>Tags <input name="tags" required placeholder="battery, plate, hands"></label>
+  </div>
+  <label class="check"><input type="checkbox" name="commercial_use" value="permitted"> Commercial use is already permitted by the recorded license</label>
+  <button type="submit">Register clip</button>
+</form>
 <table>
   <tr><th>Title</th><th>Brand</th><th>Score</th><th>Status</th></tr>
   {% for item in opportunities %}
@@ -255,7 +297,17 @@
   {% if job.report and job.report.scenes %}
   <ul>
     {% for scene in job.report.scenes %}
-    <li>{{ scene.index }}. {{ scene.visual }} · {{ scene.on_screen_text }}</li>
+    <li>
+      {{ scene.index }}. {{ scene.visual }} · {{ scene.on_screen_text }}
+      {% if scene.footage %}
+      {% if scene.footage.status == "matched" %}
+      · {{ scene.footage.filename }} · {{ scene.footage.license }} · {{ scene.footage.source }}
+      {% if scene.footage.creator %} · {{ scene.footage.creator }}{% endif %}
+      {% else %}
+      · Missing licensed footage. No unrelated clip was inserted.
+      {% endif %}
+      {% endif %}
+    </li>
     {% endfor %}
   </ul>
   {% endif %}

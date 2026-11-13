@@ -152,11 +152,11 @@ Run `run-cycle` first so the brand has opportunities. With `OPENAI_API_KEY` set,
 
 `TTS_PROVIDER=auto` uses ElevenLabs when `ELEVENLABS_API_KEY` is set. A brand can store its own voice id. `ELEVENLABS_DEFAULT_VOICE_ID` and `ELEVENLABS_MODEL_ID` override the language voices and the model. If ElevenLabs is the planned voice and the call fails, the job fails. It does not silently switch to espeak and mark the file ready. espeak-ng and Edge stay available for offline and `render-short` renders, and a production job that used them is `needs_review`.
 
-With `PEXELS_API_KEY` set, each scene searches the official Pexels video API, downloads a portrait file, and caches it under `data/cache/pexels`. The same clip is not reused inside one video. Illustrated cards are used only when a scene has no usable footage, and that fallback is recorded. Pexels rows are stored at cost 0 because this integration does not pay per call. No vision model scores whether a clip matches the sentence. The report says semantic visuals are unverified.
+Scenes use clips from `data/assets/stock`. Register each file on `/production` with its source, license, and tags, and mark commercial use only when that permission was recorded. A file without that permission is stored and is not eligible. A scene with no tagged match stays empty. The job is `needs_review`, and the report does not claim that every scene has footage. The same clip is not used twice in one video. Local selection costs 0 and does not call a paid API. `PRODUCTION_FOOTAGE=pexels` plus `PEXELS_API_KEY` is optional and off by default. No vision model scores whether a clip matches the sentence. The report says semantic visuals are unverified.
 
 The edit is a 1080×1920 film: footage is cropped to fill the frame, scenes crossfade, captions sit above the short-form UI, and the music bed is ducked under the narration. Subtitles come from the spoken text. Character timing is used only when ElevenLabs returns alignment.
 
-A file is `ready` only when the required technical checks pass and the script, voice, and footage checks pass. `needs_review` means the file plays but a fallback was used. `failed` means the file is unusable. `ready_for_publishing` is set only for `ready`. Nothing is published.
+A file is `ready` only when the required technical checks pass, the script is original, the voice is ElevenLabs, and every scene uses a distinct eligible licensed clip. `needs_review` means the file plays but a script, voice, or footage gap remains. `failed` means the file is unusable. `ready_for_publishing` is set only for `ready`. Nothing is published.
 
 `PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. The estimate is checked before the call. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
 
@@ -181,7 +181,8 @@ The Production page (`/production`) lists the script provider, voice, visual pro
 | `PRODUCTION_VIDEO_CAP_USD` | Paid-call ceiling for one production job. Default `1`. `0` blocks paid calls. |
 | `PRODUCTION_DAILY_CAP_USD` | Paid-call ceiling for the UTC day. Default `5`. |
 | `PRODUCTION_STOCK` | `none` or `wikimedia`. Default `none`. |
-| `PEXELS_API_KEY` | Optional. Official Pexels video search. Empty uses illustrated fallback footage. |
+| `PRODUCTION_FOOTAGE` | `local` or `pexels`. Default `local`. Pexels runs only when this is `pexels` and a key is set. |
+| `PEXELS_API_KEY` | Optional. Unused unless `PRODUCTION_FOOTAGE=pexels`. |
 | `ELEVENLABS_MODEL_ID` | Optional model override. Empty uses `ELEVENLABS_MODEL`. |
 | `ELEVENLABS_DEFAULT_VOICE_ID` | Optional voice used when the brand has no voice id. |
 | `SCHEDULER_POLL_SECONDS` | Seconds between poller ticks. `0` does not start the worker. The same tick runs brands. |
