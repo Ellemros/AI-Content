@@ -55,6 +55,23 @@ The brand is AI & Future. English is the channel. Czech stays a separate narrati
 python -m app.cli discover
 ```
 
+## Brand cycle
+
+Brands are separate from the AI & Future discovery channel. The seeded experiment is Everyday decisions. Its niche is stored on the brand row. Scoring does not assume that niche.
+
+```bash
+python -m app.cli run-cycle
+python -m app.cli run-cycle --slug everyday-decisions
+```
+
+The cycle reads that brand's feeds, including a feed that is turned off for the global `discover` command, and writes a partial opportunity score. A factor with no source stays unknown. The total is not scaled up to hide the gap. A YouTube view sample is stored only when `YOUTUBE_API_KEY` is set, and it is not converted into a demand score or a dollar amount. Advertising revenue stays empty.
+
+The cycle does not render a video and does not upload one. `publishing_mode` can be recorded as `test`, `approval`, or `autonomous`, and autonomous mode does not upload in this build. The daily publish limit defaults to 0. Pause a brand on `/business` and the next cycle skips it.
+
+Affiliate programs, products, and sponsorships are whatever you type in. An active program needs a commission rate. An agreed sponsorship needs a rate. A lead is not an agreement. `/go/{product_id}` counts a click and redirects only while the program is active. Conversions are not measured. Nothing inserts those links into a video.
+
+`BRAND_CYCLE_POLL_SECONDS` defaults to 0, so the laptop process does not poll. Set it above 0 on a server if you want the cycle to repeat while that server is on. The poller does not render or upload. It does not buy credits.
+
 That fetches the configured public feeds (arXiv cs.AI, the Google AI blog, and OpenAI News), stores each item, and scores it. A strong on-niche item with a confirmed original URL becomes a topic in `Researching`. A trusted site is not enough when the title is outside AI and future technology. Nothing is rendered or uploaded. Run it again and unchanged feeds are skipped. Some publishers answer 403 to this client. Those items stay in the queue instead of being treated as verified.
 
 The Research page (`/research`) shows the same queue. Add another HTTPS feed there, or turn one off. Scores are editorial heuristics. Search volume and competition stay empty until a real data source is connected. A feed summary is labeled as a lead, not a verified fact. The original URL is checked with a short request. The page body is not turned into claims.

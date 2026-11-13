@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     research_max_items: int = 8
     research_verify_limit: int = 8
 
+    # 0 keeps the brand cycle off unless a command or a server sets a poll interval.
+    brand_cycle_poll_seconds: int = 0
+    youtube_api_key: str = ""
+    opportunity_weight_monetization: float = 0.25
+    opportunity_weight_demand: float = 0.20
+    opportunity_weight_competition: float = 0.15
+    opportunity_weight_scalability: float = 0.15
+    opportunity_weight_affiliate: float = 0.10
+    opportunity_weight_cost: float = 0.10
+    opportunity_weight_evergreen: float = 0.05
+
     video_fps: int = Field(default=30)
 
     def openai_enabled(self) -> bool:
