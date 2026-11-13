@@ -3,7 +3,134 @@
 {% block body %}
 <p class="eyebrow">Scheduler and pipeline</p>
 <h1>Production</h1>
-<p>A due schedule runs topic, script, voice, and render, then stops for approval. The opportunity pipeline writes a local vertical video and does not publish it.</p>
+<p>Active brands discover topics and render vertical videos on their own schedule. A topic schedule still stops for approval. Finished files stay on this machine. This page does not publish them.</p>
+
+<section class="split">
+  <article>
+    <h2>Automation {{ "on" if automation_on else "stopped" }}</h2>
+    <p>One poller checks about every {{ "%.0f"|format(poll_seconds) }} seconds. It runs due topic schedules and due brands. It does not start a second worker.</p>
+    <form method="post" action="/production/automation">
+      <input type="hidden" name="enabled" value="{{ 'false' if automation_on else 'true' }}">
+      <button type="submit">{{ "Emergency stop" if automation_on else "Turn automation on" }}</button>
+    </form>
+    <p class="muted">A new database reads <code>AUTOMATION_ENABLED</code> once. After that, this switch is the emergency stop. The current encode can finish. No new brand video starts while it is off.</p>
+  </article>
+  <article>
+    <h2>Production spend</h2>
+    <p class="figure">${{ "%.4f"|format(production_daily) }} <span>today</span></p>
+    <p>${{ "%.4f"|format(production_month) }} this month across brands. Global daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}.</p>
+    <p class="muted">These are recorded provider and render costs. They are not revenue.</p>
+  </article>
+</section>
+
+<h2>Brands</h2>
+{% if operations %}
+{% for item in operations %}
+{% set brand = item.brand %}
+<article class="card">
+  <h3>{{ brand.name }}</h3>
+  <p>{{ brand.niche or "No niche stored." }}</p>
+  <p class="muted">{{ brand.audience or "No audience stored." }} · {{ language_labels[brand.language] if brand.language in language_labels else brand.language }} · {{ brand.status }} · automation {{ "on" if brand.automation_enabled else "off" }}</p>
+  <p>Next run: {{ brand.next_production_at or "not scheduled" }}. Last run: {{ brand.last_production_at or "none" }} · {{ brand.last_automation_status }}.</p>
+  {% if brand.last_automation_error %}<p>{{ brand.last_automation_error }}</p>{% endif %}
+  <p>Queue {{ item.queue }}. Today {{ item.videos_today }} / {{ brand.max_videos_per_day }} videos. Spend today ${{ "%.4f"|format(item.spend_today) }} of ${{ "%.2f"|format(brand.max_spend_usd_per_day or 0) }}. This month ${{ "%.4f"|format(item.spend_month) }}.</p>
+  <p class="muted">Formats: {{ brand.content_formats | join(", ") if brand.content_formats else "short" }}. Attempts {{ brand.max_attempts }}. Every {{ brand.schedule_interval_minutes }} min. Editorial gate {{ "on" if brand.editorial and brand.editorial.get("gate") else "off" }}{% if brand.editorial and brand.editorial.get("minimum") is not none %} · minimum {{ brand.editorial.get("minimum") }}{% endif %}.</p>
+  <div class="inline">
+    <form method="post" action="/production/brands/{{ brand.id }}/pause"><button type="submit" class="quiet">Pause</button></form>
+    <form method="post" action="/production/brands/{{ brand.id }}/resume"><button type="submit">Resume</button></form>
+    <form method="post" action="/production/brands/{{ brand.id }}/run"><button type="submit">Run now</button></form>
+  </div>
+  {% if item.running %}
+  <p>Running: {% for job in item.running %}{{ titles.get(job.opportunity_id, job.stage) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+  {% if item.failed %}
+  <ul>
+    {% for job in item.failed %}
+    <li>Failed · attempt {{ job.attempts }} · {{ titles.get(job.opportunity_id, job.id) }} · {{ job.error }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if item.completed %}
+  <ul>
+    {% for job in item.completed %}
+    {% set video = videos.get(job.video_id) %}
+    <li>
+      Ready for publishing · {{ titles.get(job.opportunity_id, job.id) }} · ${{ "%.4f"|format(job.cost_usd or 0) }}
+      {% if video and video.path and video.status == "ready" %}
+      <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
+      <p>Published: no.</p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <form method="post" action="/production/brands/{{ brand.id }}/limits">
+    <div class="row">
+      <label>Niche <input name="niche" value="{{ brand.niche }}"></label>
+      <label>Audience <input name="audience" value="{{ brand.audience }}"></label>
+      <label>Language
+        <select name="language">
+          {% for code in languages %}
+          <option value="{{ code }}" {% if brand.language == code %}selected{% endif %}>{{ language_labels[code] }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label>Every (minutes) <input name="interval_minutes" type="number" min="1" max="10080" value="{{ brand.schedule_interval_minutes }}"></label>
+      <label>Videos / day <input name="max_videos_per_day" type="number" min="0" max="50" value="{{ brand.max_videos_per_day }}"></label>
+      <label>Spend / day (USD) <input name="max_spend_usd_per_day" value="{{ brand.max_spend_usd_per_day }}"></label>
+      <label>Per-video cap <input name="video_spend_cap_usd" value="{{ brand.video_spend_cap_usd if brand.video_spend_cap_usd is not none else '' }}" placeholder="global"></label>
+      <label>Attempts <input name="max_attempts" type="number" min="1" max="5" value="{{ brand.max_attempts }}"></label>
+    </div>
+    <label class="check"><input type="checkbox" name="short_format" value="yes" {% if not brand.content_formats or "short" in brand.content_formats %}checked{% endif %}> Vertical short</label>
+    <label class="check"><input type="checkbox" name="long_format" value="yes" {% if brand.content_formats and "long" in brand.content_formats %}checked{% endif %}> Long (stored only; automation renders shorts)</label>
+    <label class="check"><input type="checkbox" name="editorial_gate" value="yes" {% if brand.editorial and brand.editorial.get("gate") %}checked{% endif %}> Editorial gate</label>
+    <label>Editorial minimum <input name="editorial_minimum" value="{{ brand.editorial.get('minimum') if brand.editorial and brand.editorial.get('minimum') is not none else '' }}"></label>
+    <button type="submit">Save limits</button>
+  </form>
+  <form method="post" action="/production/brands/{{ brand.id }}/feed" class="row">
+    <label>HTTPS feed <input name="feed_url" type="url" required placeholder="https://example.com/feed.xml"></label>
+    <label>Name <input name="feed_name" placeholder="Feed name"></label>
+    <button type="submit">Link feed</button>
+  </form>
+</article>
+{% endfor %}
+{% else %}
+<p>No brands yet.</p>
+{% endif %}
+
+<form method="post" action="/production/brands" class="card">
+  <h2>New brand</h2>
+  <p class="muted">The niche, audience, and limits live on this brand. Adding one does not create a social account.</p>
+  <div class="row">
+    <label>Name <input name="name" required placeholder="Workshop notes"></label>
+    <label>Slug <input name="slug" placeholder="workshop-notes"></label>
+    <label>Language
+      <select name="language">{% for code in languages %}<option value="{{ code }}">{{ language_labels[code] }}</option>{% endfor %}</select>
+    </label>
+  </div>
+  <label>Niche <input name="niche" placeholder="What this brand explains"></label>
+  <label>Audience <input name="audience" placeholder="Who it is for"></label>
+  <label>Vocabulary, comma separated <input name="terms" placeholder="plate, heat, sensor"></label>
+  <div class="row">
+    <label>Every (minutes) <input name="interval_minutes" type="number" min="1" max="10080" value="1440"></label>
+    <label>Videos / day <input name="max_videos_per_day" type="number" min="0" max="50" value="1"></label>
+    <label>Spend / day (USD) <input name="max_spend_usd_per_day" value="5"></label>
+    <label>Per-video cap <input name="video_spend_cap_usd" placeholder="optional"></label>
+    <label>Attempts <input name="max_attempts" type="number" min="1" max="5" value="2"></label>
+  </div>
+  <label>HTTPS feed <input name="feed_url" type="url" placeholder="https://example.com/feed.xml"></label>
+  <label>Feed name <input name="feed_name"></label>
+  <label>Editorial minimum <input name="editorial_minimum" placeholder="optional, 0-100"></label>
+  <label class="check"><input type="checkbox" name="short_format" value="yes" checked> Vertical short</label>
+  <label class="check"><input type="checkbox" name="block_medical" value="yes"> Hold medical-advice titles</label>
+  <label class="check"><input type="checkbox" name="block_financial" value="yes"> Hold financial-advice titles</label>
+  <label class="check"><input type="checkbox" name="editorial_gate" value="yes"> Editorial gate</label>
+  <label class="check"><input type="checkbox" name="activate" value="yes"> Active, so the poller can run it</label>
+  <button type="submit">Save brand</button>
+</form>
+
 <section class="split">
   <article>
     <h2>Poller {{ "on" if poller_on else "off" }}</h2>
@@ -134,7 +261,7 @@
   {% set video = videos.get(job.video_id) %}
   {% if video and video.path %}
   <p>File: {{ video.path }}</p>
-  <p>Status: {{ video.status }}. Published: no.</p>
+  <p>Status: {{ video.status }}. {% if video.status == "ready" %}Ready for publishing. {% endif %}Published: no.</p>
   {% if video.status == "ready" %}
   <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
   {% endif %}

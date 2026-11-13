@@ -14,6 +14,7 @@ from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
 from app.models import Brand, ProductionSchedule, PublishedPost, Script, Video
+from app.services.automation import run_brand_production
 from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
@@ -66,6 +67,22 @@ def _cycle(slug: str) -> int:
             if run.error:
                 print(run.error)
     return 0
+
+
+def _automate(slug: str) -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        brand = session.scalar(select(Brand).where(Brand.slug == slug))
+        if brand is None:
+            print("Brand was not found. No video was rendered or published.")
+            return 1
+        result = run_brand_production(session, brand)
+    print(f"{slug}: {result['status']}. Videos {result['videos']}.")
+    if result["reason"]:
+        print(result["reason"])
+    print("Published: no.")
+    return 0 if result["status"] in {"succeeded", "idle", "skipped"} else 1
 
 
 def _produce_next(slug: str, opportunity_id: str) -> int:
@@ -144,6 +161,11 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discover", help="Fetch configured public feeds and score topics. No video is rendered.")
     cycle = sub.add_parser("run-cycle", help="Score one brand's feeds. Does not render or upload.")
     cycle.add_argument("--slug", default="")
+    auto = sub.add_parser(
+        "run-automation",
+        help="Discover and produce for one active brand. Does not publish.",
+    )
+    auto.add_argument("--slug", required=True)
     produce = sub.add_parser("produce-next", help="Render the next eligible opportunity. Does not publish.")
     produce.add_argument("--brand", required=True)
     produce.add_argument("--opportunity", default="")
@@ -157,6 +179,8 @@ def main(argv: list[str] | None = None) -> int:
         return _discover()
     if args.command == "run-cycle":
         return _cycle(args.slug)
+    if args.command == "run-automation":
+        return _automate(args.slug)
     if args.command == "produce-next":
         return _produce_next(args.brand, args.opportunity)
     if args.command == "review-script":

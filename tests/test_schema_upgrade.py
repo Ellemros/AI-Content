@@ -58,3 +58,88 @@ def test_existing_sqlite_file_gains_phase2_columns(tmp_path, monkeypatch):
     finally:
         reset_engine()
         get_settings.cache_clear()
+
+
+def test_existing_brand_table_gains_automation_columns(tmp_path, monkeypatch):
+    db_path = tmp_path / "brands.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE brands (
+            id VARCHAR(36) PRIMARY KEY,
+            slug VARCHAR(80) NOT NULL,
+            name VARCHAR(160) NOT NULL,
+            niche TEXT,
+            audience TEXT,
+            language VARCHAR(8),
+            identity JSON,
+            status VARCHAR(32),
+            publishing_mode VARCHAR(32),
+            daily_publish_limit INTEGER,
+            created_at DATETIME,
+            updated_at DATETIME
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO brands (id, slug, name, status, publishing_mode, daily_publish_limit)
+        VALUES ('brand-1', 'field-notes', 'Field notes', 'experimental', 'test', 0)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE production_jobs (
+            id VARCHAR(36) PRIMARY KEY,
+            brand_id VARCHAR(36),
+            opportunity_id VARCHAR(36),
+            status VARCHAR(32),
+            stage VARCHAR(40),
+            error TEXT,
+            script_id VARCHAR(36),
+            video_id VARCHAR(36),
+            cost_usd NUMERIC,
+            report JSON,
+            started_at DATETIME,
+            finished_at DATETIME
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE production_costs (
+            id VARCHAR(36) PRIMARY KEY,
+            job_id VARCHAR(36),
+            provider VARCHAR(40),
+            operation VARCHAR(80),
+            estimated_cost_usd NUMERIC,
+            cached BOOLEAN,
+            created_at DATETIME
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    get_settings.cache_clear()
+    reset_engine()
+    try:
+        init_db()
+        with get_engine().connect() as connection:
+            brand_cols = {row[1] for row in connection.execute(text("PRAGMA table_info(brands)"))}
+            job_cols = {row[1] for row in connection.execute(text("PRAGMA table_info(production_jobs)"))}
+            cost_cols = {row[1] for row in connection.execute(text("PRAGMA table_info(production_costs)"))}
+            indexes = connection.execute(text("PRAGMA index_list(production_jobs)")).fetchall()
+        assert "automation_enabled" in brand_cols
+        assert "max_videos_per_day" in brand_cols
+        assert "max_spend_usd_per_day" in brand_cols
+        assert "content_formats" in brand_cols
+        assert "editorial" in brand_cols
+        assert "attempts" in job_cols
+        assert {"brand_id", "opportunity_id", "video_id"} <= cost_cols
+        assert any("uq_production_job_running" in str(row) for row in indexes)
+    finally:
+        reset_engine()
+        get_settings.cache_clear()

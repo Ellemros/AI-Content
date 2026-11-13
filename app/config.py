@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # switch (seeded from this value) is on. Scheduled runs never approve or export.
     scheduler_enabled: bool = False
     scheduler_poll_seconds: float = 30.0
+    # Emergency switch for brand automation. False until a new database is seeded
+    # from this value, or until the Production page turns it on. The poller above
+    # is the only worker. It does not publish.
+    automation_enabled: bool = False
 
     # Content intelligence. Scores are heuristics. They are not search volume.
     topic_score_minimum: int = 55

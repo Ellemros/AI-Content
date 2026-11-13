@@ -23,6 +23,7 @@ from app.core.jobs import mark_interrupted
 from app.core.logging import configure_logging
 from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.seed import seed
+from app.services.automation import mark_automation_interrupted
 from app.services.business.cycle import mark_cycles_interrupted
 from app.services.production import mark_production_interrupted
 from app.web.business import router as business_router
@@ -40,8 +41,9 @@ async def lifespan(_app: FastAPI):
         changed = mark_interrupted(session)
         interrupted_cycles = mark_cycles_interrupted(session)
         interrupted_jobs = mark_production_interrupted(session)
+        interrupted_brands = mark_automation_interrupted(session)
         seed(session)
-        if changed or interrupted_cycles or interrupted_jobs:
+        if changed or interrupted_cycles or interrupted_jobs or interrupted_brands:
             session.commit()
     start_scheduler()
     start_brand_worker()

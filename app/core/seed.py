@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Brand, BrandSource, Channel, ContentTemplate, ResearchSource
+from app.services.automation import seed_automation_flag
 from app.services.offline_scripts import iter_template_records
 from app.services.research.brand import BRAND_DESCRIPTION, BRAND_NAME, DEFAULT_FEEDS
 from app.services.schedule import seed_scheduler_flag
@@ -80,6 +81,7 @@ def seed(session: Session) -> None:
                 )
             )
     seed_scheduler_flag(session)
+    seed_automation_flag(session)
     session.flush()
 
 

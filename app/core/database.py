@@ -75,6 +75,28 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "master_path": "TEXT NOT NULL DEFAULT ''",
         "subtitle_edited": "BOOLEAN NOT NULL DEFAULT 0",
     },
+    "brands": {
+        "automation_enabled": "BOOLEAN NOT NULL DEFAULT 0",
+        "schedule_interval_minutes": "INTEGER NOT NULL DEFAULT 1440",
+        "next_production_at": "DATETIME",
+        "last_production_at": "DATETIME",
+        "last_automation_status": "VARCHAR(32) NOT NULL DEFAULT 'idle'",
+        "last_automation_error": "TEXT NOT NULL DEFAULT ''",
+        "max_videos_per_day": "INTEGER NOT NULL DEFAULT 1",
+        "max_spend_usd_per_day": "NUMERIC(12, 4) NOT NULL DEFAULT 5",
+        "video_spend_cap_usd": "NUMERIC(12, 4)",
+        "max_attempts": "INTEGER NOT NULL DEFAULT 2",
+        "content_formats": "JSON NOT NULL DEFAULT '[]'",
+        "editorial": "JSON NOT NULL DEFAULT '{}'",
+    },
+    "production_jobs": {
+        "attempts": "INTEGER NOT NULL DEFAULT 1",
+    },
+    "production_costs": {
+        "brand_id": "VARCHAR(36)",
+        "opportunity_id": "VARCHAR(36)",
+        "video_id": "VARCHAR(36)",
+    },
 }
 
 
@@ -105,6 +127,23 @@ def ensure_added_columns(engine: Engine | None = None) -> list[str]:
     return added
 
 
+def _ensure_production_claim_index(engine: Engine | None = None) -> None:
+    """One running job per opportunity. A second worker cannot start the same render."""
+    engine = engine or get_engine()
+    if engine.dialect.name not in {"sqlite", "postgresql"}:
+        return
+    inspector = inspect(engine)
+    if not inspector.has_table("production_jobs"):
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_production_job_running "
+                "ON production_jobs (opportunity_id) WHERE status = 'running'"
+            )
+        )
+
+
 def init_db() -> None:
     settings = get_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
@@ -113,6 +152,7 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(engine)
     ensure_added_columns(engine)
+    _ensure_production_claim_index(engine)
 
 
 def get_db() -> Iterator[Session]:
