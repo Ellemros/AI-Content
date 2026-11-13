@@ -13,10 +13,60 @@ def _escape(path: Path) -> str:
     return text.replace("\\", r"\\").replace(":", r"\:").replace("'", r"\'")
 
 
-def write_subtitles(narration: str, duration: float, path: Path) -> Path:
-    cues = time_cues(narration, duration, max_chars=40)
+def write_subtitles(narration: str, duration: float, path: Path, alignment: dict | None = None) -> Path:
+    from app.services.subtitles import cues_from_alignment, render_ass
+
+    cues = None
+    if alignment:
+        try:
+            cues = cues_from_alignment(alignment, duration)
+        except ValueError:
+            cues = None
+    if cues is None:
+        cues = time_cues(narration, duration, max_chars=32)
     path.write_text(render_srt(cues), encoding="utf-8")
+    path.with_suffix(".ass").write_text(render_ass(cues), encoding="utf-8")
     return path
+
+
+def _visual_input(path: Path, kind: str, duration: float) -> list[str]:
+    if kind == "clip":
+        return ["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(path)]
+    return ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(path)]
+
+
+def _visual_filter(index: int, kind: str, duration: float) -> str:
+    progress = f"min(t/{max(duration, 0.2):.3f}\\,1)"
+    if kind == "clip":
+        body = (
+            f"scale=1296:2304:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920:x='(in_w-out_w)/2+(in_w-out_w)*0.06*{progress}':"
+            "y='(in_h-out_h)/2',fps=30,format=yuv420p,setsar=1"
+        )
+    else:
+        motion = f"t/{duration:.3f}" if index % 2 == 0 else f"(1-t/{duration:.3f})"
+        body = (
+            f"scale=1240:2204,crop=1080:1920:"
+            f"x='(in_w-out_w)*{motion}':y='(in_h-out_h)*{motion}',"
+            "fps=30,format=yuv420p,setsar=1"
+        )
+    return f"[{index}:v]{body}[v{index}]"
+
+
+def _join_visuals(count: int, play: list[float], overlap: float) -> list[str]:
+    if count == 1:
+        return ["[v0]null[vcat]"]
+    filters = []
+    shown = play[0]
+    for index in range(1, count):
+        offset = shown - overlap
+        source = "v0" if index == 1 else f"x{index - 1}"
+        dest = "vcat" if index == count - 1 else f"x{index}"
+        filters.append(
+            f"[{source}][v{index}]xfade=transition=fade:duration={overlap:.3f}:offset={offset:.3f}[{dest}]"
+        )
+        shown = shown + play[index] - overlap
+    return filters
 
 
 def render_film(
@@ -27,44 +77,47 @@ def render_film(
     music: Path,
     srt: Path,
     output: Path,
+    kinds: list[str] | None = None,
 ) -> None:
     if len(images) != len(durations) or not images:
         raise ValueError("Each scene image needs a duration.")
+    scene_kinds = kinds or ["image"] * len(images)
+    if len(scene_kinds) != len(images):
+        raise ValueError("Each scene needs a visual kind.")
     _font_path, family = find_font(False)
     fonts_dir = _font_path.parent
+    count = len(images)
+    overlap = 0.12 if count > 1 else 0.0
+    # A little extra on each input keeps the crossfade inside the clip. -t trims it back.
+    play = [
+        duration + (overlap if index < count - 1 else 0.0) + 0.05 for index, duration in enumerate(durations)
+    ]
     args: list[str] = []
     filters: list[str] = []
-    for index, (image, duration) in enumerate(zip(images, durations, strict=True)):
-        args.extend(["-loop", "1", "-t", f"{duration:.3f}", "-i", str(image)])
-        progress = f"t/{duration:.3f}" if index % 2 == 0 else f"(1-t/{duration:.3f})"
-        fade = 0.12 if duration > 0.5 else 0.0
-        fade_out = max(duration - fade, 0)
-        fades = ""
-        if fade:
-            fades = (
-                f",fade=t=in:st=0:d={fade}:color=0x101820,"
-                f"fade=t=out:st={fade_out:.3f}:d={fade}:color=0x101820"
-            )
-        filters.append(
-            f"[{index}:v]scale=1240:2204,crop=1080:1920:"
-            f"x='(in_w-out_w)*{progress}':y='(in_h-out_h)*{progress}',"
-            f"fps=30,format=yuv420p,setsar=1{fades}[v{index}]"
+    for index, (image, duration, kind) in enumerate(zip(images, play, scene_kinds, strict=True)):
+        args.extend(_visual_input(image, kind, duration))
+        filters.append(_visual_filter(index, kind, duration))
+    filters.extend(_join_visuals(count, play, overlap))
+    captions = srt.with_suffix(".ass")
+    if captions.is_file():
+        filters.append(f"[vcat]subtitles='{_escape(captions)}':fontsdir='{_escape(fonts_dir)}'[vout]")
+    else:
+        style = (
+            f"Fontname={family},FontSize=54,PrimaryColour=&H00FFFFFF,"
+            "OutlineColour=&H00101820,BorderStyle=1,Outline=4,Alignment=2,MarginV=320"
         )
-    count = len(images)
-    concat = "".join(f"[v{index}]" for index in range(count))
-    filters.append(f"{concat}concat=n={count}:v=1:a=0[vcat]")
-    style = (
-        f"Fontname={family},FontSize=36,PrimaryColour=&H00FFFFFF,"
-        "OutlineColour=&H00101820,BorderStyle=1,Outline=3,Alignment=2,MarginV=180"
-    )
-    filters.append(
-        f"[vcat]subtitles='{_escape(srt)}':fontsdir='{_escape(fonts_dir)}':force_style='{style}'[vout]"
-    )
+        filters.append(
+            f"[vcat]subtitles='{_escape(srt)}':fontsdir='{_escape(fonts_dir)}':force_style='{style}'[vout]"
+        )
     args.extend(["-i", str(voice), "-i", str(music)])
+    fade_out = max(sum(durations) - 0.15, 0)
     filters.append(f"[{count}:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,asplit=2[va][vb]")
-    filters.append(f"[{count + 1}:a]aresample=48000,volume=0.18[mbed]")
+    filters.append(f"[{count + 1}:a]aresample=48000,volume=0.12[mbed]")
     filters.append("[mbed][vb]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[ducked]")
-    filters.append("[va][ducked]amix=inputs=2:duration=first:normalize=0[aout]")
+    filters.append(
+        "[va][ducked]amix=inputs=2:duration=first:normalize=0,"
+        f"afade=t=in:st=0:d=0.08,afade=t=out:st={fade_out:.3f}:d=0.12[aout]"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()

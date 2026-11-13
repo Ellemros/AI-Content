@@ -288,6 +288,7 @@ def production_brand_limits(
     short_format: str = Form(""),
     long_format: str = Form(""),
     editorial_gate: str = Form(""),
+    voice_id: str = Form(""),
     session: Session = Depends(get_db),
 ):
     formats = []
@@ -311,6 +312,7 @@ def production_brand_limits(
             niche=niche,
             audience=audience,
             language=language,
+            voice_id=voice_id,
         )
     except AppError as exc:
         return _redirect("/production", error=exc.message)

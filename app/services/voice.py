@@ -50,9 +50,13 @@ def plan_engine(settings: Settings | None = None) -> str:
 
 def default_voice(settings: Settings, engine: str, language: str) -> str:
     if engine == "elevenlabs":
+        if settings.elevenlabs_default_voice_id.strip():
+            return settings.elevenlabs_default_voice_id.strip()
         voice = settings.elevenlabs_voice_id_cs if language == "cs" else settings.elevenlabs_voice_id_en
         if not voice.strip():
-            raise AppError("Set ELEVENLABS_VOICE_ID_EN and ELEVENLABS_VOICE_ID_CS for the selected language.")
+            raise AppError(
+                "Set ELEVENLABS_DEFAULT_VOICE_ID, or ELEVENLABS_VOICE_ID_EN and ELEVENLABS_VOICE_ID_CS."
+            )
         return voice.strip()
     if engine == "edge":
         return settings.edge_voice_cs if language == "cs" else settings.edge_voice_en
@@ -97,6 +101,17 @@ def _trim(src: Path, dest: Path) -> None:
         src.unlink(missing_ok=True)
 
 
+def _read_alignment(raw: Path) -> dict | None:
+    path = raw.with_name(raw.stem + ".alignment.json")
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def speak(
     session: Session,
     text: str,
@@ -110,6 +125,9 @@ def speak(
     settings: Settings,
 ) -> str:
     """Synthesize into raw_path. Returns the engine that actually spoke."""
+    from app.services.production.speech import speakable
+
+    text = speakable(text)
     if engine == "elevenlabs":
         elevenlabs_provider.synthesize(
             session,
@@ -194,6 +212,7 @@ def ensure_audio(
         )
         actual = str(meta.get("provider") or planned)
         duration = float(meta["duration"])
+        alignment = meta.get("alignment") if isinstance(meta.get("alignment"), dict) else None
     else:
         raw = directory / f"{version.id}-{digest[:12]}-raw.mp3"
         if planned == "espeak":
@@ -209,6 +228,7 @@ def ensure_audio(
             raw_path=raw,
             settings=settings,
         )
+        alignment = _read_alignment(raw)
         _trim(raw, final_path)
         duration = media_summary(final_path)["duration"]
     if duration < 0.8:
@@ -219,7 +239,10 @@ def ensure_audio(
         "stability": stability,
         "similarity": similarity,
         "similarity_effect": "elevenlabs" if actual == "elevenlabs" else "local-approximation",
+        "subtitle_timing": "character" if alignment else "phrase",
     }
+    if alignment:
+        metadata["alignment"] = alignment
     if existing is None:
         existing = AudioFile(
             script_version_id=version.id,

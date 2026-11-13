@@ -92,6 +92,81 @@ def time_cues(text: str, total_seconds: float, max_chars: int = 84) -> list[Cue]
     return cues
 
 
+def cues_from_alignment(alignment: dict, duration: float) -> list[Cue]:
+    chars = list(alignment.get("characters") or [])
+    starts = list(alignment.get("character_start_times_seconds") or [])
+    ends = list(alignment.get("character_end_times_seconds") or [])
+    if not chars or len(chars) != len(starts) or len(chars) != len(ends):
+        raise ValueError("Alignment is incomplete.")
+    phrases: list[tuple[float, float, str]] = []
+    buffer = ""
+    start = float(starts[0])
+    end = float(ends[0])
+    for char, raw_start, raw_end in zip(chars, starts, ends, strict=True):
+        if buffer and len(buffer) >= 32 and char == " ":
+            phrases.append((start, end, buffer.strip()))
+            buffer = ""
+            start = float(raw_start)
+            continue
+        if not buffer:
+            start = float(raw_start)
+        buffer += str(char)
+        end = float(raw_end)
+    if buffer.strip():
+        phrases.append((start, end, buffer.strip()))
+    if not phrases:
+        raise ValueError("Alignment produced no cues.")
+    cues = [
+        Cue(index, item_start, max(item_end, item_start + 0.2), _wrap(text, 32))
+        for index, (item_start, item_end, text) in enumerate(phrases, start=1)
+    ]
+    last = cues[-1]
+    cues[-1] = Cue(last.index, last.start, max(last.end, duration), last.text)
+    return cues
+
+
+def _ass_time(seconds: float) -> str:
+    centi = max(int(round(seconds * 100)), 0)
+    hours, rem = divmod(centi, 360_000)
+    minutes, rem = divmod(rem, 6_000)
+    secs, hundredths = divmod(rem, 100)
+    return f"{hours}:{minutes:02d}:{secs:02d}.{hundredths:02d}"
+
+
+def _highlight(text: str) -> str:
+    words = [word for word in text.replace("\n", " ").split() if len(word) >= 5]
+    spoken = text.replace("\n", r"\N")
+    if not words:
+        return spoken
+    pick = max(words, key=len)
+    return spoken.replace(pick, "{\\c&H0060C8FF&}" + pick + "{\\c&H00FFFFFF&}", 1)
+
+
+def render_ass(cues: list[Cue]) -> str:
+    lines = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "PlayResX: 1080",
+        "PlayResY: 1920",
+        "WrapStyle: 0",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+        "Style: Main,DejaVu Sans,64,&H00FFFFFF,&H000000FF,&H00101820,&H64000000,"
+        "0,0,0,0,100,100,0,0,1,4,0,2,90,90,320,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+    ]
+    for cue in cues:
+        lines.append(
+            f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Main,,0,0,0,,{_highlight(cue.text)}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def render_srt(cues: list[Cue]) -> str:
     blocks = [
         f"{cue.index}\n{format_timestamp(cue.start)} --> {format_timestamp(cue.end)}\n{cue.text}\n"

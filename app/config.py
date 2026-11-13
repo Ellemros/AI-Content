@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
     elevenlabs_voice_id_en: str = ""
     elevenlabs_voice_id_cs: str = ""
+    elevenlabs_default_voice_id: str = ""
     elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_model_id: str = ""
     elevenlabs_cost_per_1k_chars: float = 0.30
 
     tts_provider: str = "auto"
@@ -78,6 +80,7 @@ class Settings(BaseSettings):
     production_video_cap_usd: float = 1.0
     production_daily_cap_usd: float = 5.0
     production_stock: str = "none"
+    pexels_api_key: str = ""
 
     video_fps: int = Field(default=30)
 
@@ -86,6 +89,10 @@ class Settings(BaseSettings):
 
     def elevenlabs_enabled(self) -> bool:
         return bool(self.elevenlabs_api_key.strip())
+
+    def elevenlabs_model_name(self) -> str:
+        chosen = self.elevenlabs_model_id.strip() or self.elevenlabs_model.strip()
+        return chosen or "eleven_multilingual_v2"
 
 
 @lru_cache

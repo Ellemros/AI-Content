@@ -9,8 +9,8 @@ from app.services.quality import evaluate
 from app.services.textutil import tokens
 
 
-def _check(name: str, passed: bool, detail: str) -> dict:
-    return {"name": name, "passed": passed, "detail": detail}
+def _check(name: str, passed: bool, detail: str, *, required: bool = True) -> dict:
+    return {"name": name, "passed": passed, "detail": detail, "required": required}
 
 
 def source_relevance(narration: str, extracted: str, title: str) -> tuple[bool, str]:
@@ -79,6 +79,10 @@ def assess_production(
     claims: list[dict],
     cost: Decimal,
     video_cap: Decimal,
+    script_mode: str = "dossier",
+    voice_provider: str = "",
+    visual_kinds: list[str] | None = None,
+    clip_ids: list[str] | None = None,
 ) -> dict:
     technical = evaluate(
         video_path=video_path,
@@ -115,5 +119,70 @@ def assess_production(
         except MediaError as exc:
             checks.append(_check("aspect_ratio", False, str(exc)[:200]))
     checks.append(_check("visual_motion", moved, moved_detail))
-    passed = all(item["passed"] for item in checks)
-    return {"passed": passed, "checks": checks, "checksum": technical.get("checksum", "")}
+    kinds = visual_kinds or []
+    clip_count = sum(1 for kind in kinds if kind == "clip")
+    unique_ids = {item for item in (clip_ids or []) if item}
+    footage_ok = (
+        bool(kinds)
+        and clip_count == len(kinds)
+        and len(unique_ids) == clip_count
+        and clip_count >= min(4, len(kinds))
+    )
+    if not kinds:
+        footage_detail = "Visual kind was not recorded."
+    elif clip_count < len(kinds):
+        footage_detail = (
+            f"{clip_count} of {len(kinds)} scenes use footage. "
+            "Illustrated scenes are a fallback, not finished footage."
+        )
+    elif len(unique_ids) < min(4, len(kinds)):
+        footage_detail = f"Only {len(unique_ids)} distinct clips were used."
+    else:
+        footage_detail = f"{len(unique_ids)} distinct footage clips."
+    checks.append(_check("footage_coverage", footage_ok, footage_detail, required=False))
+    original = script_mode == "original"
+    checks.append(
+        _check(
+            "script_mode",
+            original,
+            "Original model script." if original else "Fallback script assembled from source sentences.",
+            required=False,
+        )
+    )
+    natural = voice_provider == "elevenlabs"
+    voice_detail = f"Voice provider: {voice_provider or 'unknown'}."
+    if voice_provider == "espeak":
+        voice_detail = "espeak-ng is a robotic fallback. This video is not production-ready."
+    elif voice_provider == "edge":
+        voice_detail = "Edge TTS is a local voice. ElevenLabs was not used."
+    checks.append(_check("voice_provider", natural, voice_detail, required=False))
+    ass_path = subtitle_path.with_suffix(".ass")
+    ass_text = ass_path.read_text(encoding="utf-8") if ass_path.is_file() else ""
+    safe = "MarginV, Encoding" in ass_text and ",320,1" in ass_text
+    checks.append(
+        _check(
+            "subtitle_safe_area",
+            safe,
+            "Captions use a 320px bottom margin on a 1920px frame."
+            if safe
+            else "Caption safe-area style was not found.",
+            required=False,
+        )
+    )
+    required = [item for item in checks if item.get("required", True)]
+    limits = [item for item in checks if not item.get("required", True)]
+    if not all(item["passed"] for item in required):
+        status = "failed"
+    elif any(not item["passed"] for item in limits):
+        status = "needs_review"
+    else:
+        status = "ready"
+    warnings = [item["detail"] for item in checks if not item["passed"]]
+    return {
+        "passed": status != "failed",
+        "status": status,
+        "checks": checks,
+        "warnings": warnings,
+        "semantic_visual": "unverified",
+        "checksum": technical.get("checksum", ""),
+    }

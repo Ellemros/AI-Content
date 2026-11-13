@@ -102,10 +102,11 @@ def test_automated_cycle_renders_a_playable_mp4_and_skips_the_duplicate(db):
     assert job is not None
     assert job.status == "succeeded"
     assert job.report["published"] is False
-    assert job.report["ready_for_publishing"] is True
+    assert job.report["ready_for_publishing"] is False
+    assert job.report["quality_status"] == "needs_review"
     video = db.get(Video, job.video_id)
     assert video is not None
-    assert video.status == "ready"
+    assert video.status == "needs_review"
     assert video.approved is False
     path = Path(video.path)
     assert path.is_file() and path.stat().st_size > 0
@@ -169,6 +170,7 @@ def test_limits_pause_stop_and_two_brands(db, monkeypatch):
 
     monkeypatch.setattr("app.services.automation.run_brand_cycle", fake_cycle)
     monkeypatch.setattr("app.services.automation.produce_next", fake_produce)
+
     def pending(_session, brand):
         row = ContentOpportunity(id=f"pending-{brand.slug}", brand_id=brand.id, title=brand.slug)
         return [row]

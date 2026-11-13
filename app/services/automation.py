@@ -165,6 +165,7 @@ def update_brand_limits(
     niche: str,
     audience: str,
     language: str,
+    voice_id: str = "",
 ) -> Brand:
     if language not in LANGUAGES:
         raise AppError("Language must be en or cs.")
@@ -182,6 +183,9 @@ def update_brand_limits(
     brand.niche = niche.strip()
     brand.audience = audience.strip()
     brand.language = language
+    identity = dict(brand.identity or {})
+    identity["voice_id"] = voice_id.strip()
+    brand.identity = identity
     session.flush()
     return brand
 

@@ -15,7 +15,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-On Windows, use `py -3.12 -m venv .venv`, `.venv\Scripts\activate`, and `copy .env.example .env`. Install FFmpeg and espeak-ng so both are on `PATH`.
+On Windows, use `python -m venv .venv`, `.venv\Scripts\activate`, and `copy .env.example .env`. Install FFmpeg and espeak-ng so both are on `PATH`.
 
 ## First video, no API keys
 
@@ -148,13 +148,19 @@ python -m app.cli produce-next --brand everyday-decisions
 python -m app.cli produce-next --brand everyday-decisions --opportunity OPPORTUNITY_ID
 ```
 
-Run `run-cycle` first so the brand has opportunities. With no `OPENAI_API_KEY`, the script is built from sentences on the source page. A configured model is used only when its narration stays inside that page. `TTS_PROVIDER=auto` uses ElevenLabs when that key is set, otherwise Edge, otherwise espeak-ng. The job report names the engine that actually spoke.
+Run `run-cycle` first so the brand has opportunities. With `OPENAI_API_KEY` set, the script is an original narration checked against the source page. Invented numbers, copied sentences, and generic openers are rejected. With no key, or when that check fails, the script is an explicit fallback built from source sentences. That fallback is not an original AI script, and the video is `needs_review`.
 
-Scenes are original illustrations with a slow camera move, burned subtitles, and an original generated music bed. Set `PRODUCTION_STOCK=wikimedia` to allow a Commons still when the license is public domain, CC0, CC BY, or CC BY-SA. Non-commercial and no-derivatives files are refused. The default is `none`.
+`TTS_PROVIDER=auto` uses ElevenLabs when `ELEVENLABS_API_KEY` is set. A brand can store its own voice id. `ELEVENLABS_DEFAULT_VOICE_ID` and `ELEVENLABS_MODEL_ID` override the language voices and the model. If ElevenLabs is the planned voice and the call fails, the job fails. It does not silently switch to espeak and mark the file ready. espeak-ng and Edge stay available for offline and `render-short` renders, and a production job that used them is `needs_review`.
 
-`PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
+With `PEXELS_API_KEY` set, each scene searches the official Pexels video API, downloads a portrait file, and caches it under `data/cache/pexels`. The same clip is not reused inside one video. Illustrated cards are used only when a scene has no usable footage, and that fallback is recorded. Pexels rows are stored at cost 0 because this integration does not pay per call. No vision model scores whether a clip matches the sentence. The report says semantic visuals are unverified.
 
-The Production page (`/production`) lists opportunities, scripts, scenes, costs, failures, and a player for a file that passed the checks.
+The edit is a 1080×1920 film: footage is cropped to fill the frame, scenes crossfade, captions sit above the short-form UI, and the music bed is ducked under the narration. Subtitles come from the spoken text. Character timing is used only when ElevenLabs returns alignment.
+
+A file is `ready` only when the required technical checks pass and the script, voice, and footage checks pass. `needs_review` means the file plays but a fallback was used. `failed` means the file is unusable. `ready_for_publishing` is set only for `ready`. Nothing is published.
+
+`PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. The estimate is checked before the call. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
+
+The Production page (`/production`) lists the script provider, voice, visual provider, clip count, fallbacks, quality status, cost rows, and a player for `ready` and `needs_review` files.
 
 ## Environment
 
@@ -163,7 +169,7 @@ The Production page (`/production`) lists opportunities, scripts, scenes, costs,
 | `DATABASE_URL` | SQLite by default (`sqlite:///./data/app.db`). Models stay portable to PostgreSQL. |
 | `DATA_DIR` | Media and the SQLite file's sibling folders. |
 | `OPENAI_API_KEY` | Optional. Topics, scripts, localization, and metadata. |
-| `ELEVENLABS_API_KEY` | Optional. Also set `ELEVENLABS_VOICE_ID_EN` and `ELEVENLABS_VOICE_ID_CS`. |
+| `ELEVENLABS_API_KEY` | Optional. Preferred production voice. Also set a voice id. |
 | `TTS_PROVIDER` | `auto`, `espeak`, `edge`, or `elevenlabs`. `auto` picks ElevenLabs, then Edge, then espeak-ng. |
 | `MONTHLY_SPEND_CAP_USD` | Paid calls over this cap fail with a clear error. `0` blocks every paid call. |
 | `NEAR_DUPLICATE_THRESHOLD` | Jaccard cutoff for topic titles. Default `0.82`. |
@@ -175,11 +181,14 @@ The Production page (`/production`) lists opportunities, scripts, scenes, costs,
 | `PRODUCTION_VIDEO_CAP_USD` | Paid-call ceiling for one production job. Default `1`. `0` blocks paid calls. |
 | `PRODUCTION_DAILY_CAP_USD` | Paid-call ceiling for the UTC day. Default `5`. |
 | `PRODUCTION_STOCK` | `none` or `wikimedia`. Default `none`. |
+| `PEXELS_API_KEY` | Optional. Official Pexels video search. Empty uses illustrated fallback footage. |
+| `ELEVENLABS_MODEL_ID` | Optional model override. Empty uses `ELEVENLABS_MODEL`. |
+| `ELEVENLABS_DEFAULT_VOICE_ID` | Optional voice used when the brand has no voice id. |
 | `SCHEDULER_POLL_SECONDS` | Seconds between poller ticks. `0` does not start the worker. The same tick runs brands. |
 | `SCHEDULER_ENABLED` | Seeds the topic-schedule switch on a new database. |
 | `AUTOMATION_ENABLED` | Seeds the emergency switch on a new database. `false` produces no brand video until you turn it on. |
 
-Leave both keys empty to stay on offline script templates and a local voice. Offline drafts are marked as drafts and do not invent citations.
+Leave the provider keys empty to stay on the explicit script, voice, and footage fallbacks. Those videos are `needs_review`. They are not marked ready.
 
 ## Turn on OpenAI and ElevenLabs
 
