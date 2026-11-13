@@ -55,6 +55,16 @@ The brand is AI & Future. English is the channel. Czech stays a separate narrati
 python -m app.cli discover
 ```
 
+That fetches the configured public feeds (arXiv cs.AI, the Google AI blog, and OpenAI News), stores each item, and scores it. A strong on-niche item with a confirmed original URL becomes a topic in `Researching`. A trusted site is not enough when the title is outside AI and future technology. Nothing is rendered or uploaded. Run it again and unchanged feeds are skipped. Some publishers answer 403 to this client. Those items stay in the queue instead of being treated as verified.
+
+The Research page (`/research`) shows the same queue. Add another HTTPS feed there, or turn one off. Scores are editorial heuristics. Search volume and competition stay empty until a real data source is connected. A feed summary is labeled as a lead, not a verified fact. The original URL is checked with a short request. The page body is not turned into claims.
+
+On a script page, **Run editorial review** stores an audience, a central question, a takeaway, the evidence, and a score from 0 to 100. A specific unsourced claim fails the review. `EDITORIAL_GATE` defaults to off, so `render-short` behaves as before. Set `EDITORIAL_GATE=true` to refuse a render below `EDITORIAL_QUALITY_MINIMUM` (default 70).
+
+```bash
+python -m app.cli review-script --id SCRIPT_ID
+```
+
 ## Brand cycle
 
 Brands are separate from the AI & Future discovery channel. The seeded experiment is Everyday decisions. Its niche is stored on the brand row. Scoring does not assume that niche.
@@ -72,15 +82,22 @@ Affiliate programs, products, and sponsorships are whatever you type in. An acti
 
 `BRAND_CYCLE_POLL_SECONDS` defaults to 0, so the laptop process does not poll. Set it above 0 on a server if you want the cycle to repeat while that server is on. The poller does not render or upload. It does not buy credits.
 
-That fetches the configured public feeds (arXiv cs.AI, the Google AI blog, and OpenAI News), stores each item, and scores it. A strong on-niche item with a confirmed original URL becomes a topic in `Researching`. A trusted site is not enough when the title is outside AI and future technology. Nothing is rendered or uploaded. Run it again and unchanged feeds are skipped. Some publishers answer 403 to this client. Those items stay in the queue instead of being treated as verified.
+## Produce a video
 
-The Research page (`/research`) shows the same queue. Add another HTTPS feed there, or turn one off. Scores are editorial heuristics. Search volume and competition stay empty until a real data source is connected. A feed summary is labeled as a lead, not a verified fact. The original URL is checked with a short request. The page body is not turned into claims.
-
-On a script page, **Run editorial review** stores an audience, a central question, a takeaway, the evidence, and a score from 0 to 100. A specific unsourced claim fails the review. `EDITORIAL_GATE` defaults to off, so `render-short` behaves as before. Set `EDITORIAL_GATE=true` to refuse a render below `EDITORIAL_QUALITY_MINIMUM` (default 70).
+`produce-next` takes one eligible opportunity for a brand, downloads the source page, and writes a vertical MP4. Held items and opportunities that already succeeded are skipped. A thin page fails the job and the reason is stored. The file is not published.
 
 ```bash
-python -m app.cli review-script --id SCRIPT_ID
+python -m app.cli produce-next --brand everyday-decisions
+python -m app.cli produce-next --brand everyday-decisions --opportunity OPPORTUNITY_ID
 ```
+
+Run `run-cycle` first so the brand has opportunities. With no `OPENAI_API_KEY`, the script is built from sentences on the source page. A configured model is used only when its narration stays inside that page. `TTS_PROVIDER=auto` uses ElevenLabs when that key is set, otherwise Edge, otherwise espeak-ng. The job report names the engine that actually spoke.
+
+Scenes are original illustrations with a slow camera move, burned subtitles, and an original generated music bed. Set `PRODUCTION_STOCK=wikimedia` to allow a Commons still when the license is public domain, CC0, CC BY, or CC BY-SA. Non-commercial and no-derivatives files are refused. The default is `none`.
+
+`PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
+
+The Production page (`/production`) lists opportunities, scripts, scenes, costs, failures, and a player for a file that passed the checks.
 
 ## Environment
 
@@ -98,6 +115,9 @@ python -m app.cli review-script --id SCRIPT_ID
 | `EDITORIAL_QUALITY_MINIMUM` | Editorial reject cutoff. Default `70`. |
 | `EDITORIAL_GATE` | `true` blocks a render below the editorial cutoff. Default `false`. |
 | `RESEARCH_MAX_ITEMS` | Items read from each feed. Default `8`. |
+| `PRODUCTION_VIDEO_CAP_USD` | Paid-call ceiling for one production job. Default `1`. `0` blocks paid calls. |
+| `PRODUCTION_DAILY_CAP_USD` | Paid-call ceiling for the UTC day. Default `5`. |
+| `PRODUCTION_STOCK` | `none` or `wikimedia`. Default `none`. |
 
 Leave both keys empty to stay on offline script templates and a local voice. Offline drafts are marked as drafts and do not invent citations.
 

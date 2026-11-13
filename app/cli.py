@@ -13,10 +13,11 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import Brand, PublishedPost, Script
+from app.models import Brand, PublishedPost, Script, Video
 from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
+from app.services.production import produce_next
 from app.services.research import review_script, run_discovery
 
 
@@ -66,6 +67,36 @@ def _cycle(slug: str) -> int:
     return 0
 
 
+def _produce_next(slug: str, opportunity_id: str) -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        brand = session.scalar(select(Brand).where(Brand.slug == slug))
+        if brand is None:
+            print("Brand was not found. No video was rendered or published.")
+            return 1
+        try:
+            job = produce_next(session, brand, opportunity_id=opportunity_id)
+        except AppError as exc:
+            print(exc.message)
+            return 1
+        if job is None:
+            print("No eligible opportunity. Nothing was rendered or published.")
+            return 1
+        providers = ", ".join((job.report or {}).get("providers") or []) or "none"
+        print(f"Job: {job.id}. Status: {job.status}. Stage: {job.stage}.")
+        print(f"Providers: {providers}. Cost: ${float(job.cost_usd or 0):.4f}.")
+        if job.error:
+            print(job.error)
+        if job.video_id:
+            video = session.get(Video, job.video_id)
+            if video is not None and video.path:
+                print(f"Video: {video.path}")
+                print(f"Video status: {video.status}")
+        print("Published: no.")
+        return 0 if job.status == "succeeded" else 1
+
+
 def _review(script_id: str) -> int:
     init_db()
     with session_scope() as session:
@@ -107,6 +138,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("discover", help="Fetch configured public feeds and score topics. No video is rendered.")
     cycle = sub.add_parser("run-cycle", help="Score one brand's feeds. Does not render or upload.")
     cycle.add_argument("--slug", default="")
+    produce = sub.add_parser("produce-next", help="Render the next eligible opportunity. Does not publish.")
+    produce.add_argument("--brand", required=True)
+    produce.add_argument("--opportunity", default="")
     review = sub.add_parser("review-script", help="Score one script for originality and unsupported claims.")
     review.add_argument("--id", required=True)
     args = parser.parse_args(argv)
@@ -117,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         return _discover()
     if args.command == "run-cycle":
         return _cycle(args.slug)
+    if args.command == "produce-next":
+        return _produce_next(args.brand, args.opportunity)
     if args.command == "review-script":
         return _review(args.id)
     if args.export and not args.approve:
