@@ -18,6 +18,7 @@ from app.core.time import utc_now
 from app.domain import CATEGORIES, LANGUAGES
 from app.models import (
     APIUsage,
+    Asset,
     Brand,
     ContentOpportunity,
     DiscoveredItem,
@@ -35,12 +36,14 @@ from app.schemas.content import Reference, TopicCreate
 from app.services.assets import build_music, store_asset
 from app.services.cost import assert_within_cap
 from app.services.probes import media_summary
+from app.services.production import pexels as pexels_api
 from app.services.production.budget import add_cost, assert_production_budget
 from app.services.production.checks import assess_production
 from app.services.production.extract import extract_article, quotations_from
 from app.services.production.film import durations_for, render_film, write_subtitles
 from app.services.production.illustrate import brand_palette, draw_scene
 from app.services.production.scripting import narration_from_source, plan_scenes
+from app.services.production.speech import speakable
 from app.services.production.stock import search_commons
 from app.services.research.editorial import review_script
 from app.services.textutil import jaccard
@@ -50,6 +53,10 @@ from app.services.voice import ensure_audio
 logger = logging.getLogger("app.production")
 _READY = (
     "Local file passed the production checks. It is ready for a future publish step. It was not published."
+)
+_REVIEW = (
+    "The file plays, but a script, voice, or footage fallback was used. "
+    "It is not marked ready for publishing."
 )
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
@@ -325,7 +332,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     )
     if len(draft["beats"]) < 4:
         raise AppError("The script did not produce enough scenes.")
-    scenes = plan_scenes(draft["beats"])
+    scenes = plan_scenes(draft["beats"], draft.get("visual_queries"))
     add_cost(session, job, provider=draft["provider"], operation="script", cost=0)
     topic = _topic(session, brand, opportunity, item, language)
     script, version = _script(session, topic, language, draft, scenes)
@@ -333,23 +340,26 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     _apply_editorial_gate(session, brand, script)
     job.stage = "narration"
     _reserve_voice_budget(session, job, draft["narration"])
+    voice_id = _brand_voice(brand, language)
     audio = ensure_audio(
         session,
         version,
         language=language,
         stability=0.5,
         similarity=0.75,
+        voice_id=voice_id,
         synthesizer=synthesizer,
     )
     _record_voice_cost(session, job, audio.provider, draft["narration"])
     work = get_settings().data_dir / "production" / job.id
     work.mkdir(parents=True, exist_ok=True)
     job.stage = "visuals"
-    images, asset_ids, stock_used = _visuals(session, job, brand, scenes, work, stock_client)
+    images, asset_ids, stock_used, kinds, clip_ids = _visuals(session, job, brand, scenes, work, stock_client)
     job.stage = "render"
     durations = durations_for(scenes, audio.duration_seconds)
     srt_path = work / "captions.srt"
-    write_subtitles(version.narration, audio.duration_seconds, srt_path)
+    alignment = (audio.metadata_json or {}).get("alignment")
+    write_subtitles(speakable(version.narration), audio.duration_seconds, srt_path, alignment=alignment)
     music = build_music(
         session,
         mood=version.music_mood or "curious",
@@ -364,6 +374,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         music=Path(music.path),
         srt=srt_path,
         output=output,
+        kinds=kinds,
     )
     summary = media_summary(output)
     video = Video(
@@ -402,11 +413,27 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         claims=version.factual_claims,
         cost=Decimal(str(job.cost_usd or 0)),
         video_cap=Decimal(str(settings.production_video_cap_usd)),
+        script_mode=str(draft.get("script_mode") or "fallback"),
+        voice_provider=audio.provider,
+        visual_kinds=kinds,
+        clip_ids=clip_ids,
     )
     video.quality_report = report
-    providers = [draft["provider"], audio.provider, "pillow", "ffmpeg-lavfi"]
-    if stock_used:
+    visual_provider = "pexels" if "clip" in kinds and "image" not in kinds else "illustrated-fallback"
+    if "clip" in kinds and "image" in kinds:
+        visual_provider = "pexels+illustrated-fallback"
+    if stock_used and visual_provider == "illustrated-fallback":
+        visual_provider = "wikimedia-commons"
+    providers = [draft["provider"], audio.provider, visual_provider, "ffmpeg"]
+    if stock_used and "wikimedia-commons" not in providers:
         providers.append("wikimedia-commons")
+    fallbacks = []
+    if draft.get("script_mode") != "original":
+        fallbacks.append("script")
+    if audio.provider != "elevenlabs":
+        fallbacks.append("voice")
+    if "image" in kinds:
+        fallbacks.append("footage")
     metadata = {
         "title": version.title,
         "description": version.description,
@@ -415,6 +442,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "published": False,
         "ready_for_publishing": False,
     }
+    quality_status = report["status"]
     job.report = {
         "providers": providers,
         "rejected_model": draft.get("rejected_model") or "",
@@ -424,18 +452,35 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "dossier_id": dossier.id,
         "published": False,
         "ready_for_publishing": False,
+        "script_provider": draft["provider"],
+        "script_mode": draft.get("script_mode") or "fallback",
+        "voice_provider": audio.provider,
+        "voice_name": audio.voice_id,
+        "visual_provider": visual_provider,
+        "unique_clips": len({item for item in clip_ids if item}),
+        "fallbacks": fallbacks,
+        "quality_status": quality_status,
+        "warnings": report.get("warnings") or [],
+        "semantic_visual": report.get("semantic_visual") or "unverified",
     }
     topic.status = "In production"
-    if not report["passed"]:
+    if quality_status == "failed":
         video.status = "blocked"
-        failed = [item["name"] for item in report["checks"] if not item["passed"]]
+        failed = [
+            item["name"] for item in report["checks"] if item.get("required", True) and not item["passed"]
+        ]
         raise AppError("Production checks failed: " + ", ".join(failed))
-    video.status = "ready"
-    topic.status = "Ready"
-    opportunity.production_status = "ready"
-    opportunity.production_block_reason = _READY
-    metadata["ready_for_publishing"] = True
-    job.report = {**job.report, "metadata": metadata, "ready_for_publishing": True, "published": False}
+    video.status = quality_status
+    if quality_status == "ready":
+        topic.status = "Ready"
+        opportunity.production_status = "ready"
+        opportunity.production_block_reason = _READY
+        metadata["ready_for_publishing"] = True
+        job.report = {**job.report, "metadata": metadata, "ready_for_publishing": True, "published": False}
+    else:
+        topic.status = "Needs review"
+        opportunity.production_status = "needs_review"
+        opportunity.production_block_reason = _REVIEW
     for cost in session.scalars(select(ProductionCost).where(ProductionCost.job_id == job.id)):
         cost.video_id = video.id
         cost.brand_id = job.brand_id
@@ -586,13 +631,28 @@ def _model_writer(session: Session, job: ProductionJob):
         return None
 
     def complete(*, title: str, extracted: str, url: str, language: str) -> dict:
+        brand = session.get(Brand, job.brand_id) if job.brand_id else None
+        audience = brand.audience if brand is not None else ""
+        niche = brand.niche if brand is not None else ""
         system = (
-            "Write a short vertical video script using only the source sentences. "
-            "Do not add studies, numbers, products, or advice that the page does not state. "
-            "Return JSON with title, hook, narration, beats, claims, description, and hashtags. "
-            "Each claim text must be copied from the source."
+            "You write an original short-form narration for one vertical video. "
+            "Use the source only as evidence. Paraphrase. "
+            "Do not copy any source sentence of 10 or more words. "
+            "Do not invent statistics, quotations, studies, products, or numbers. "
+            "If the source is uncertain, keep the claim uncertain. "
+            "Open with a concrete hook in the first sentence. Keep one idea. "
+            "Use short spoken sentences, then a conclusion. "
+            "Add a call to action only when the source supports it. "
+            "Do not use phrases such as 'in today's world', 'let's dive in', or 'have you ever wondered'. "
+            "Match the requested language, audience, and niche. "
+            "Return JSON with title, hook, narration, beats (4 to 6 short sentences), "
+            "visual_queries (one specific footage search query per beat), "
+            "claims (paraphrases grounded in the source, each with text), description, and hashtags."
         )
-        user = f"Language: {language}\nTitle: {title}\nURL: {url}\n\nSource:\n{extracted[:6000]}"
+        user = (
+            f"Language: {language}\nAudience: {audience}\nNiche: {niche}\n"
+            f"Title: {title}\nURL: {url}\n\nSource:\n{extracted[:6000]}"
+        )
         provider = OpenAIProvider(session)
         cache_key = make_cache_key(
             {
@@ -643,6 +703,78 @@ def _record_voice_cost(session, job, provider: str, narration: str) -> None:
     add_cost(session, job, provider=provider, operation="narration", cost=cost)
 
 
+def _brand_voice(brand: Brand, language: str) -> str:
+    from app.services.voice import plan_engine
+
+    identity = brand.identity if isinstance(brand.identity, dict) else {}
+    chosen = str(identity.get("voice_id") or "").strip()
+    settings = get_settings()
+    if plan_engine(settings) != "elevenlabs":
+        return ""
+    if chosen:
+        return chosen
+    return settings.elevenlabs_default_voice_id.strip()
+
+
+def _recent_pexels_ids(session: Session) -> set[str]:
+    rows = session.scalars(
+        select(Asset).where(Asset.source == "pexels").order_by(Asset.created_at.desc()).limit(80)
+    ).all()
+    found: set[str] = set()
+    for row in rows:
+        identity = str((row.metadata_json or {}).get("pexels_id") or "")
+        if identity:
+            found.add(identity)
+    return found
+
+
+def _try_pexels_clip(session, job, scene, client, used: set[str], recent: set[str]):
+    queries = []
+    primary = str(scene.get("visual_query") or "").strip()
+    if primary:
+        queries.append(primary)
+    motifs = " ".join(scene.get("motifs") or [])[:80].strip()
+    if motifs and motifs not in queries:
+        queries.append(motifs)
+    label = str(scene.get("on_screen_text") or "").strip()
+    if label and label not in queries:
+        queries.append(label)
+    for query in queries:
+        try:
+            videos = pexels_api.search_videos(query, client=client)
+        except (AppError, httpx.HTTPError):
+            continue
+        picked = pexels_api.pick_video(videos, used_ids=used, recent_ids=recent)
+        if picked is None:
+            continue
+        link = str((picked.get("file") or {}).get("link") or "")
+        dest = pexels_api.cache_path(picked["id"])
+        try:
+            pexels_api.download_video(link, dest, client=client)
+        except (AppError, httpx.HTTPError):
+            continue
+        asset = store_asset(
+            session,
+            kind="clip",
+            path=dest,
+            source="pexels",
+            license_name="Pexels License",
+            metadata={
+                "pexels_id": picked["id"],
+                "page": picked.get("page") or "",
+                "author": picked.get("author") or "",
+                "author_url": picked.get("author_url") or "",
+                "license": picked.get("license") or "",
+                "file_url": link,
+                "query": query,
+            },
+            name=f"pexels-{picked['id']}",
+        )
+        add_cost(session, job, provider="pexels", operation="footage", cost=0)
+        return dest, picked["id"], asset.id
+    return None
+
+
 def _visuals(session, job, brand, scenes, work: Path, stock_client):
     palette = brand_palette(brand)
     photo = None
@@ -674,25 +806,57 @@ def _visuals(session, job, brand, scenes, work: Path, stock_client):
             )
     images: list[Path] = []
     asset_ids: list[str] = []
-    for scene in scenes:
-        path = work / f"scene-{scene['index']}.png"
-        draw_scene(
-            path,
-            kind=scene["visual"],
-            motifs=scene["motifs"],
-            palette=palette,
-            photo=photo if scene["index"] == 1 else None,
-            credit=credit if scene["index"] == 1 else "",
-        )
-        asset = store_asset(
-            session,
-            kind="scene",
-            path=path,
-            source="pillow",
-            license_name="original",
-            metadata={"visual": scene["visual"], "motifs": scene["motifs"], "original": True},
-        )
-        images.append(path)
-        asset_ids.append(asset.id)
-    add_cost(session, job, provider="pillow", operation="illustrate", cost=0)
-    return images, asset_ids, stock_used
+    kinds: list[str] = []
+    clip_ids: list[str] = []
+    owned = None
+    pexels_client = None
+    if get_settings().pexels_api_key.strip():
+        owned = httpx.Client(timeout=30, follow_redirects=True)
+        pexels_client = owned
+    used: set[str] = set()
+    recent = _recent_pexels_ids(session) if pexels_client is not None else set()
+    try:
+        for scene in scenes:
+            clip = None
+            if pexels_client is not None:
+                clip = _try_pexels_clip(session, job, scene, pexels_client, used, recent)
+            if clip is not None:
+                path, clip_id, asset_id = clip
+                images.append(path)
+                asset_ids.append(asset_id)
+                kinds.append("clip")
+                clip_ids.append(clip_id)
+                used.add(clip_id)
+                continue
+            path = work / f"scene-{scene['index']}.png"
+            draw_scene(
+                path,
+                kind=scene["visual"],
+                motifs=scene["motifs"],
+                palette=palette,
+                photo=photo if scene["index"] == 1 else None,
+                credit=credit if scene["index"] == 1 else "",
+            )
+            asset = store_asset(
+                session,
+                kind="scene",
+                path=path,
+                source="pillow",
+                license_name="original",
+                metadata={
+                    "visual": scene["visual"],
+                    "motifs": scene["motifs"],
+                    "original": True,
+                    "fallback": True,
+                },
+            )
+            images.append(path)
+            asset_ids.append(asset.id)
+            kinds.append("image")
+            clip_ids.append("")
+    finally:
+        if owned is not None:
+            owned.close()
+    if "image" in kinds:
+        add_cost(session, job, provider="pillow", operation="illustrate", cost=0)
+    return images, asset_ids, stock_used, kinds, clip_ids

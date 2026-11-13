@@ -307,13 +307,19 @@ def test_produce_next_writes_a_vertical_mp4(db):
     assert job is not None
     assert job.status == "succeeded", job.error
     assert job.report["published"] is False
+    assert job.report["ready_for_publishing"] is False
+    assert job.report["script_mode"] == "fallback"
+    assert job.report["quality_status"] == "needs_review"
+    assert "script" in job.report["fallbacks"]
+    assert "voice" in job.report["fallbacks"]
+    assert "footage" in job.report["fallbacks"]
     assert "openai" not in job.report["providers"]
     assert "dossier" in job.report["providers"]
     assert "espeak" in job.report["providers"]
     video = db.get(Video, job.video_id)
     assert video is not None
     assert video.approved is False
-    assert video.status == "ready"
+    assert video.status == "needs_review"
     path = Path(video.path)
     assert path.is_file() and path.stat().st_size > 0
     summary = media_summary(path)

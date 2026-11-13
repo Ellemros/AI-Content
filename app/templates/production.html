@@ -55,8 +55,11 @@
     {% for job in item.completed %}
     {% set video = videos.get(job.video_id) %}
     <li>
-      Ready for publishing · {{ titles.get(job.opportunity_id, job.id) }} · ${{ "%.4f"|format(job.cost_usd or 0) }}
-      {% if video and video.path and video.status == "ready" %}
+      {% if video and video.status == "ready" %}Ready for publishing
+      {% elif video and video.status == "needs_review" %}Needs review
+      {% else %}Finished{% endif %}
+      · {{ titles.get(job.opportunity_id, job.id) }} · ${{ "%.4f"|format(job.cost_usd or 0) }}
+      {% if video and video.path and video.status in ["ready", "needs_review"] %}
       <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
       <p>Published: no.</p>
       {% endif %}
@@ -82,6 +85,7 @@
       <label>Spend / day (USD) <input name="max_spend_usd_per_day" value="{{ brand.max_spend_usd_per_day }}"></label>
       <label>Per-video cap <input name="video_spend_cap_usd" value="{{ brand.video_spend_cap_usd if brand.video_spend_cap_usd is not none else '' }}" placeholder="global"></label>
       <label>Attempts <input name="max_attempts" type="number" min="1" max="5" value="{{ brand.max_attempts }}"></label>
+      <label>ElevenLabs voice ID <input name="voice_id" value="{{ brand.identity.get('voice_id', '') if brand.identity else '' }}" placeholder="optional"></label>
     </div>
     <label class="check"><input type="checkbox" name="short_format" value="yes" {% if not brand.content_formats or "short" in brand.content_formats %}checked{% endif %}> Vertical short</label>
     <label class="check"><input type="checkbox" name="long_format" value="yes" {% if brand.content_formats and "long" in brand.content_formats %}checked{% endif %}> Long (stored only; automation renders shorts)</label>
@@ -258,11 +262,28 @@
   {% if job.report and job.report.metadata %}
   <p>{{ job.report.metadata.description }}</p>
   {% endif %}
+  {% if job.report and job.report.script_provider %}
+  <p>
+    Script: {{ job.report.script_provider }} ({{ job.report.script_mode }}).
+    Voice: {{ job.report.voice_provider }}{% if job.report.voice_name %} · {{ job.report.voice_name }}{% endif %}.
+    Visuals: {{ job.report.visual_provider }}.
+    Unique clips: {{ job.report.unique_clips }}.
+    {% if job.report.fallbacks %}Fallback: {{ job.report.fallbacks | join(", ") }}.{% else %}No fallback.{% endif %}
+  </p>
+  <p>Quality: {{ job.report.quality_status }}. Semantic visuals: {{ job.report.semantic_visual }}.</p>
+  {% if job.report.warnings %}
+  <ul>
+    {% for warning in job.report.warnings %}
+    <li>{{ warning }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% endif %}
   {% set video = videos.get(job.video_id) %}
   {% if video and video.path %}
   <p>File: {{ video.path }}</p>
-  <p>Status: {{ video.status }}. {% if video.status == "ready" %}Ready for publishing. {% endif %}Published: no.</p>
-  {% if video.status == "ready" %}
+  <p>Status: {{ video.status }}. {% if video.status == "ready" %}Ready for publishing. {% elif video.status == "needs_review" %}Needs review. {% endif %}Published: no.</p>
+  {% if video.status in ["ready", "needs_review"] %}
   <video controls preload="metadata" src="/production/videos/{{ video.id }}" width="270"></video>
   {% endif %}
   {% endif %}
