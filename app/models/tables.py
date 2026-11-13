@@ -417,6 +417,21 @@ class Brand(Base):
     status: Mapped[str] = mapped_column(String(32), default="experimental")
     publishing_mode: Mapped[str] = mapped_column(String(32), default="test")
     daily_publish_limit: Mapped[int] = mapped_column(Integer, default=0)
+    # Per-brand automation. Empty formats mean a vertical short. The niche stays on this row.
+    automation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    schedule_interval_minutes: Mapped[int] = mapped_column(Integer, default=1440, server_default="1440")
+    next_production_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_production_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_automation_status: Mapped[str] = mapped_column(String(32), default="idle", server_default="idle")
+    last_automation_error: Mapped[str] = mapped_column(Text, default="", server_default="")
+    max_videos_per_day: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    max_spend_usd_per_day: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), default=Decimal("5"), server_default="5"
+    )
+    video_spend_cap_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    content_formats: Mapped[list] = mapped_column(JSON, default=list)
+    editorial: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -543,6 +558,7 @@ class ProductionJob(Base):
     opportunity_id: Mapped[str] = mapped_column(ForeignKey("content_opportunities.id"), index=True)
     status: Mapped[str] = mapped_column(String(32), default="running")
     stage: Mapped[str] = mapped_column(String(40), default="select")
+    attempts: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     error: Mapped[str] = mapped_column(Text, default="")
     script_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     video_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -557,6 +573,9 @@ class ProductionCost(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     job_id: Mapped[str] = mapped_column(ForeignKey("production_jobs.id"), index=True)
+    brand_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    opportunity_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    video_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     provider: Mapped[str] = mapped_column(String(40))
     operation: Mapped[str] = mapped_column(String(80))
     estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))

@@ -23,7 +23,8 @@ from app.services.cost import month_spend
 from app.services.research.discover import run_discovery
 
 logger = logging.getLogger("app.business")
-_BLOCK = "This build evaluates opportunities. It does not render a video or upload one."
+_BLOCK = "Scored only. No video has been rendered for this opportunity yet."
+_KEEP_PRODUCTION = {"ready", "producing", "failed", "interrupted"}
 
 
 def mark_cycles_interrupted(session: Session) -> int:
@@ -130,8 +131,10 @@ def _score_items(
             row.youtube_sample = sample
         row.status = "held" if reason else "evaluated"
         row.hold_reason = reason
-        row.production_status = "blocked"
-        row.production_block_reason = _BLOCK
+        already_produced = existing is not None and existing.production_status in _KEEP_PRODUCTION
+        if not already_produced:
+            row.production_status = "blocked"
+            row.production_block_reason = _BLOCK
         if existing is None:
             session.add(row)
         written += 1

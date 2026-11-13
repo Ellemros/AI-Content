@@ -2,11 +2,13 @@
 
 import hashlib
 import logging
+import threading
 from decimal import Decimal
 from pathlib import Path
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -19,6 +21,7 @@ from app.models import (
     Brand,
     ContentOpportunity,
     DiscoveredItem,
+    ProductionCost,
     ProductionJob,
     ResearchDossier,
     Script,
@@ -39,11 +42,26 @@ from app.services.production.film import durations_for, render_film, write_subti
 from app.services.production.illustrate import brand_palette, draw_scene
 from app.services.production.scripting import narration_from_source, plan_scenes
 from app.services.production.stock import search_commons
+from app.services.research.editorial import review_script
+from app.services.textutil import jaccard
 from app.services.topics import create_topic
 from app.services.voice import ensure_audio
 
 logger = logging.getLogger("app.production")
-_READY = "Local file passed the production checks. It was not published."
+_READY = (
+    "Local file passed the production checks. It is ready for a future publish step. It was not published."
+)
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _opportunity_lock(opportunity_id: str) -> threading.Lock:
+    with _locks_guard:
+        lock = _locks.get(opportunity_id)
+        if lock is None:
+            lock = threading.Lock()
+            _locks[opportunity_id] = lock
+        return lock
 
 
 def mark_production_interrupted(session: Session) -> int:
@@ -52,7 +70,49 @@ def mark_production_interrupted(session: Session) -> int:
         row.status = "interrupted"
         row.error = "The process stopped while this production was running."
         row.finished_at = utc_now()
+        opportunity = session.get(ContentOpportunity, row.opportunity_id)
+        if opportunity is not None and opportunity.production_status == "producing":
+            opportunity.production_status = "interrupted"
+            opportunity.production_block_reason = row.error
     return len(rows)
+
+
+def _attempt_counts(session: Session, brand_id: str) -> dict[str, int]:
+    rows = session.execute(
+        select(ProductionJob.opportunity_id, func.count())
+        .where(ProductionJob.brand_id == brand_id)
+        .group_by(ProductionJob.opportunity_id)
+    ).all()
+    return {opportunity_id: int(count) for opportunity_id, count in rows}
+
+
+def _running_ids(session: Session, brand_id: str) -> set[str]:
+    return set(
+        session.scalars(
+            select(ProductionJob.opportunity_id).where(
+                ProductionJob.brand_id == brand_id,
+                ProductionJob.status == "running",
+            )
+        ).all()
+    )
+
+
+def _produced_titles(session: Session, brand_id: str) -> list[str]:
+    return list(
+        session.scalars(
+            select(ContentOpportunity.title)
+            .join(ProductionJob, ProductionJob.opportunity_id == ContentOpportunity.id)
+            .where(
+                ProductionJob.brand_id == brand_id,
+                ProductionJob.status.in_(("succeeded", "running")),
+            )
+        ).all()
+    )
+
+
+def _near_duplicate(title: str, existing: list[str]) -> bool:
+    threshold = get_settings().near_duplicate_threshold
+    return any(jaccard(title, other) >= threshold for other in existing)
 
 
 def eligible_opportunities(session: Session, brand: Brand) -> list[ContentOpportunity]:
@@ -64,13 +124,27 @@ def eligible_opportunities(session: Session, brand: Brand) -> list[ContentOpport
             )
         ).all()
     )
+    attempts = _attempt_counts(session, brand.id)
+    running = _running_ids(session, brand.id)
+    produced = _produced_titles(session, brand.id)
+    limit = int(brand.max_attempts or 2)
     rows = session.scalars(
         select(ContentOpportunity).where(
             ContentOpportunity.brand_id == brand.id,
             ContentOpportunity.status == "evaluated",
         )
     ).all()
-    pending = [row for row in rows if row.id not in done and not (row.hold_reason or "").strip()]
+    pending = []
+    for row in rows:
+        if row.id in done or row.id in running:
+            continue
+        if (row.hold_reason or "").strip():
+            continue
+        if attempts.get(row.id, 0) >= limit:
+            continue
+        if _near_duplicate(row.title, produced):
+            continue
+        pending.append(row)
     pending.sort(
         key=lambda row: (
             row.partial_score is None,
@@ -120,6 +194,15 @@ def produce_next(
     )
 
 
+def _running_job(session: Session, opportunity_id: str) -> ProductionJob | None:
+    return session.scalar(
+        select(ProductionJob).where(
+            ProductionJob.opportunity_id == opportunity_id,
+            ProductionJob.status == "running",
+        )
+    )
+
+
 def _produce(
     session: Session,
     brand: Brand,
@@ -129,34 +212,86 @@ def _produce(
     synthesizer,
     stock_client,
 ) -> ProductionJob:
-    job = ProductionJob(brand_id=brand.id, opportunity_id=opportunity.id, status="running", stage="select")
-    session.add(job)
-    session.flush()
+    lock = _opportunity_lock(opportunity.id)
+    if not lock.acquire(blocking=False):
+        current = _running_job(session, opportunity.id)
+        if current is not None:
+            return current
+        raise AppError("This opportunity is already being produced.")
     try:
-        _run(
-            session,
-            job,
-            brand,
-            opportunity,
-            fetch=fetch,
-            synthesizer=synthesizer,
-            stock_client=stock_client,
+        current = _running_job(session, opportunity.id)
+        if current is not None:
+            return current
+        finished = session.scalar(
+            select(ProductionJob).where(
+                ProductionJob.opportunity_id == opportunity.id,
+                ProductionJob.status == "succeeded",
+            )
         )
-    except Exception as exc:
-        message = getattr(exc, "message", None) or str(exc)
-        job.status = "failed"
-        job.error = message[:500]
-        job.finished_at = utc_now()
-        opportunity.production_status = "failed"
-        opportunity.production_block_reason = job.error
-        if job.video_id:
-            video = session.get(Video, job.video_id)
-            if video is not None and video.status == "rendering":
-                video.status = "failed"
-                video.error = job.error
-        logger.warning("production failed", extra={"job": job.id, "stage": job.stage, "error": job.error})
-        session.flush()
-    return job
+        if finished is not None:
+            return finished
+        prior = session.scalar(
+            select(func.count())
+            .select_from(ProductionJob)
+            .where(ProductionJob.opportunity_id == opportunity.id)
+        )
+        limit = int(brand.max_attempts or 2)
+        if int(prior or 0) >= limit:
+            latest = session.scalar(
+                select(ProductionJob)
+                .where(ProductionJob.opportunity_id == opportunity.id)
+                .order_by(ProductionJob.started_at.desc())
+            )
+            if latest is not None:
+                return latest
+        job = ProductionJob(
+            brand_id=brand.id,
+            opportunity_id=opportunity.id,
+            status="running",
+            stage="select",
+            attempts=int(prior or 0) + 1,
+        )
+        session.add(job)
+        opportunity.production_status = "producing"
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            current = _running_job(session, opportunity.id)
+            if current is not None:
+                return current
+            raise
+        session.commit()
+        try:
+            _run(
+                session,
+                job,
+                brand,
+                opportunity,
+                fetch=fetch,
+                synthesizer=synthesizer,
+                stock_client=stock_client,
+            )
+        except Exception as exc:
+            message = getattr(exc, "message", None) or str(exc)
+            job.status = "failed"
+            job.error = message[:500]
+            job.finished_at = utc_now()
+            opportunity.production_status = "failed"
+            opportunity.production_block_reason = job.error
+            if job.video_id:
+                video = session.get(Video, job.video_id)
+                if video is not None and video.status == "rendering":
+                    video.status = "failed"
+                    video.error = job.error
+            logger.warning(
+                "production failed",
+                extra={"job": job.id, "stage": job.stage, "error": job.error, "attempt": job.attempts},
+            )
+        session.commit()
+        return job
+    finally:
+        lock.release()
 
 
 def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) -> None:
@@ -195,6 +330,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     topic = _topic(session, brand, opportunity, item, language)
     script, version = _script(session, topic, language, draft, scenes)
     job.script_id = script.id
+    _apply_editorial_gate(session, brand, script)
     job.stage = "narration"
     _reserve_voice_budget(session, job, draft["narration"])
     audio = ensure_audio(
@@ -277,6 +413,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "hashtags": version.hashtags,
         "source_url": item.url,
         "published": False,
+        "ready_for_publishing": False,
     }
     job.report = {
         "providers": providers,
@@ -286,6 +423,7 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "quality": report,
         "dossier_id": dossier.id,
         "published": False,
+        "ready_for_publishing": False,
     }
     topic.status = "In production"
     if not report["passed"]:
@@ -296,6 +434,12 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     topic.status = "Ready"
     opportunity.production_status = "ready"
     opportunity.production_block_reason = _READY
+    metadata["ready_for_publishing"] = True
+    job.report = {**job.report, "metadata": metadata, "ready_for_publishing": True, "published": False}
+    for cost in session.scalars(select(ProductionCost).where(ProductionCost.job_id == job.id)):
+        cost.video_id = video.id
+        cost.brand_id = job.brand_id
+        cost.opportunity_id = job.opportunity_id
     job.status = "succeeded"
     job.stage = "saved"
     job.finished_at = utc_now()
@@ -307,6 +451,26 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
 
 
 _FRAMES_LANGS = {"en", "cs"}
+
+
+def _apply_editorial_gate(session: Session, brand: Brand, script: Script) -> None:
+    """Honor the global editorial gate and any stricter rule stored on the brand."""
+    settings = get_settings()
+    editorial = brand.editorial if isinstance(brand.editorial, dict) else {}
+    brand_gate = bool(editorial.get("gate"))
+    minimum = editorial.get("minimum")
+    if not settings.editorial_gate and not brand_gate and minimum is None:
+        return
+    review = review_script(session, script)
+    required = review.threshold
+    if minimum is not None:
+        required = max(required, int(minimum))
+    if review.passed and review.quality_score >= required:
+        return
+    kinds = ", ".join(str(issue.get("kind", "")) for issue in (review.issues or [])[:6]) or "below threshold"
+    raise AppError(
+        f"Editorial score {review.quality_score} is below {required} ({kinds}). The video was not rendered."
+    )
 
 
 def _fetch_page(url: str) -> tuple[int, str]:

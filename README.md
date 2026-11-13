@@ -98,7 +98,46 @@ The cycle does not render a video and does not upload one. `publishing_mode` can
 
 Affiliate programs, products, and sponsorships are whatever you type in. An active program needs a commission rate. An agreed sponsorship needs a rate. A lead is not an agreement. `/go/{product_id}` counts a click and redirects only while the program is active. Conversions are not measured. Nothing inserts those links into a video.
 
-`BRAND_CYCLE_POLL_SECONDS` defaults to 0, so the laptop process does not poll. Set it above 0 on a server if you want the cycle to repeat while that server is on. The poller does not render or upload. It does not buy credits.
+`BRAND_CYCLE_POLL_SECONDS` defaults to 0. That optional poller only scores. It does not render. Brand production runs from the scheduler poller, which is off when `SCHEDULER_POLL_SECONDS` is 0. Neither poller runs while the machine is off.
+
+## Autonomous brands
+
+The Production page is the operating dashboard. One process runs the poller. That poller is the only worker: it runs due topic schedules, and it runs each active brand. Topic schedules still stop before approval. A brand run does not. It discovers, selects, writes, renders, checks, and stores. It does not publish, and it does not open a social account.
+
+This keeps running only while the server process is running. A laptop that is asleep or switched off does not produce anything. Use a machine or a container that stays on.
+
+```bash
+cp .env.example .env
+# SCHEDULER_POLL_SECONDS must be above 0 or the poller never starts.
+# AUTOMATION_ENABLED=true seeds the emergency switch on a brand-new database.
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Docker is the same process, with the database and media on a volume so a restart keeps them:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+`./data` holds `app.db` and the MP4 files. Stopping the container stops automation. Starting it again marks an in-flight job interrupted and the next due pass can retry it. Failed jobs stay in the database with the reason.
+
+On `/production`:
+
+1. Save a brand with its niche, audience, language, feed, video cap, and daily spend cap. Everyday decisions is only the seeded experiment. A new brand does not require a code change.
+2. Resume it so its status is active.
+3. Turn automation on. Emergency stop turns it off for every brand. Pause stops one brand.
+4. Leave the process running. The poller calls the brand on its interval.
+
+`python -m app.cli run-automation --slug your-brand` runs one pass immediately. It uses the same function as the poller. `produce-next` still renders one opportunity and is unchanged.
+
+A pass runs the brand cycle, then the existing production pipeline, until the daily video count or the daily spend cap says stop. A zero daily spend cap starts no new job. Paid calls still fail closed at the global per-video and daily caps. Costs are stored by brand, opportunity, video, provider, and operation. Revenue and audience size are not invented.
+
+The same opportunity cannot be rendered twice, and a near-duplicate title is skipped after a success. Two workers cannot hold the same opportunity in `running`. A failed attempt stays visible and is retried until the brand's attempt limit.
+
+Editorial and production checks still apply. A global `EDITORIAL_GATE`, or a gate stored on the brand, refuses a weak script before the render. A file that passes is `ready` and marked ready for a later publishing step. Nothing is uploaded.
+
+Logs are JSON on the process stdout (`LOG_LEVEL`). There is no separate log file.
 
 ## Produce a video
 
@@ -136,6 +175,9 @@ The Production page (`/production`) lists opportunities, scripts, scenes, costs,
 | `PRODUCTION_VIDEO_CAP_USD` | Paid-call ceiling for one production job. Default `1`. `0` blocks paid calls. |
 | `PRODUCTION_DAILY_CAP_USD` | Paid-call ceiling for the UTC day. Default `5`. |
 | `PRODUCTION_STOCK` | `none` or `wikimedia`. Default `none`. |
+| `SCHEDULER_POLL_SECONDS` | Seconds between poller ticks. `0` does not start the worker. The same tick runs brands. |
+| `SCHEDULER_ENABLED` | Seeds the topic-schedule switch on a new database. |
+| `AUTOMATION_ENABLED` | Seeds the emergency switch on a new database. `false` produces no brand video until you turn it on. |
 
 Leave both keys empty to stay on offline script templates and a local voice. Offline drafts are marked as drafts and do not invent citations.
 

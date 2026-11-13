@@ -1,4 +1,4 @@
-"""In-process poller. Schedules live in the database and stop before approval."""
+"""In-process poller. Topic schedules stop before approval. Brand automation uses the same tick."""
 
 import logging
 import threading
@@ -47,7 +47,16 @@ class ProductionScheduler:
 
         try:
             with session_scope() as session:
-                run_due(session)
+                try:
+                    run_due(session)
+                except Exception:
+                    logger.exception(
+                        "Topic schedule tick failed.",
+                        extra={"stage": "scheduler", "attempt": 1},
+                    )
+                from app.services.automation import run_due_brands
+
+                run_due_brands(session)
         except Exception:
             logger.exception("Scheduler tick failed.", extra={"stage": "scheduler", "attempt": 1})
 

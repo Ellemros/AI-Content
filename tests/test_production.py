@@ -209,11 +209,9 @@ def test_selection_skips_held_items_and_a_zero_cap_blocks_a_paid_estimate(db):
     finally:
         settings.production_video_cap_usd = original_cap
     assert job.cost_usd == 0
-    running = ProductionJob(brand_id=brand.id, opportunity_id=chosen.id, status="running")
-    db.add(running)
-    db.flush()
     assert mark_production_interrupted(db) >= 1
-    assert running.status == "interrupted"
+    assert job.status == "interrupted"
+    assert "stopped" in job.error
 
 
 def test_scene_drawings_change_with_the_brand_and_the_layout(db, tmp_path):
