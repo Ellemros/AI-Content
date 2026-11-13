@@ -7,6 +7,14 @@
 {% if job %}
 <p>Stage {{ job.stage }} · attempt {{ job.attempts }} · {{ job.progress }}%</p>
 <div class="bar"><span style="width: {{ job.progress }}%"></span></div>
+{% if events %}
+<h2>Steps</h2>
+<ol class="steps">
+  {% for event in events %}
+  <li class="{{ 'fail' if event.level == 'error' else '' }}">{{ event.stage }} · attempt {{ event.attempt }} · {{ event.message }}</li>
+  {% endfor %}
+</ol>
+{% endif %}
 {% endif %}
 {% if video.error %}<p class="flash bad">{{ video.error }}</p>{% endif %}
 {% if video.path and video.status != 'rendering' %}
@@ -37,6 +45,17 @@
 {% endif %}
 {% if video.status in ['failed', 'interrupted', 'blocked'] %}
 <form method="post" action="/videos/{{ video.id }}/retry"><button type="submit">Retry render</button></form>
+{% endif %}
+{% if video.status != 'exported' and srt_text %}
+<h2>Subtitles</h2>
+<p>Saving re-burns captions onto the existing picture and voice. Rebuilding cues from the narration replaces an edit.</p>
+<form method="post" action="/videos/{{ video.id }}/subtitles" class="card">
+  <label>SRT <textarea name="srt" rows="10">{{ srt_text }}</textarea></label>
+  <button type="submit">Save and re-burn</button>
+</form>
+<form method="post" action="/videos/{{ video.id }}/subtitles/rebuild">
+  <button type="submit" class="quiet">Rebuild cues from narration</button>
+</form>
 {% endif %}
 {% if video.status != 'exported' %}
 <form method="post" action="/videos/{{ video.id }}/regenerate" class="inline">

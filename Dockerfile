@@ -8,7 +8,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN mkdir -p data/assets data/audio data/videos data/thumbnails data/exports data/cache
+RUN mkdir -p data/assets data/audio data/videos data/thumbnails data/exports data/cache data/library
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000

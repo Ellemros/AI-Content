@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.models import Brand, BrandSource, Channel, ContentTemplate, ResearchSource
 from app.services.offline_scripts import iter_template_records
 from app.services.research.brand import BRAND_DESCRIPTION, BRAND_NAME, DEFAULT_FEEDS
+from app.services.schedule import seed_scheduler_flag
 
 _EXPERIMENT = {
     "slug": "everyday-decisions",
@@ -78,6 +79,7 @@ def seed(session: Session) -> None:
                     },
                 )
             )
+    seed_scheduler_flag(session)
     session.flush()
 
 

@@ -33,7 +33,14 @@
     <h2>Scenes</h2>
     <ol>
       {% for scene in version.scenes %}
-      <li><strong>{{ scene.on_screen_text }}</strong> — {{ scene.narration }}<br><em>{{ scene.visual }}</em></li>
+      <li>
+        <strong>{{ scene.on_screen_text }}</strong> — {{ scene.narration }}<br>
+        <em>{{ scene.visual }}</em><br>
+        <span class="muted">
+          Visual: {{ asset_names.get(scene.asset_id, "generated card") if scene.asset_id else "generated card" }}
+          {% if scene.music_asset_id %} · Music: {{ asset_names.get(scene.music_asset_id, scene.music_asset_id) }}{% endif %}
+        </span>
+      </li>
       {% endfor %}
     </ol>
   </article>
@@ -78,6 +85,38 @@
   <label>Scenes JSON, used only when rebuild is off <textarea name="scenes_json" rows="6">{{ scenes_json }}</textarea></label>
   <button type="submit">Save version</button>
 </form>
+<h2>Scene assets</h2>
+<p>A library image or clip replaces the generated card for that scene. Music replaces the generated bed. Rebuild scenes from narration clears these attachments.</p>
+{% if library %}
+<form method="post" action="/scripts/{{ script.id }}/assets" class="card">
+  <div class="row">
+    <label>Scene
+      <select name="scene_index">
+        {% for scene in version.scenes %}
+        <option value="{{ scene.index }}">{{ scene.index }}. {{ scene.on_screen_text }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Library asset
+      <select name="asset_id">
+        <option value="">Remove attachment</option>
+        {% for asset in library %}
+        <option value="{{ asset.id }}">{{ asset.name }} · {{ asset.kind }} · {{ asset.license }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Slot
+      <select name="slot">
+        <option value="visual">Visual</option>
+        <option value="music">Music bed</option>
+      </select>
+    </label>
+  </div>
+  <button type="submit">Attach</button>
+</form>
+{% else %}
+<p>No library assets yet. <a href="/library">Register one</a> with its source and license.</p>
+{% endif %}
 <form method="post" action="/videos/generate" class="card">
   <input type="hidden" name="script_id" value="{{ script.id }}">
   <div class="row">

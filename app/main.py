@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.business import router as business_api_router
+from app.api.factory import router as factory_router
 from app.api.production import router as production_api_router
 from app.api.publishing import router as publishing_router
 from app.api.research import router as research_api_router
@@ -20,7 +21,7 @@ from app.core.database import init_db, session_scope
 from app.core.errors import AppError
 from app.core.jobs import mark_interrupted
 from app.core.logging import configure_logging
-from app.core.scheduler import register_future_jobs
+from app.core.scheduler import start_scheduler, stop_scheduler
 from app.core.seed import seed
 from app.services.business.cycle import mark_cycles_interrupted
 from app.services.production import mark_production_interrupted
@@ -42,9 +43,10 @@ async def lifespan(_app: FastAPI):
         seed(session)
         if changed or interrupted_cycles or interrupted_jobs:
             session.commit()
-    register_future_jobs()
+    start_scheduler()
     start_brand_worker()
     yield
+    stop_scheduler()
 
 
 def create_app() -> FastAPI:
@@ -65,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(publishing_router)
     app.include_router(research_api_router)
     app.include_router(business_api_router)
+    app.include_router(factory_router)
     app.include_router(production_api_router)
 
     @app.get("/health")

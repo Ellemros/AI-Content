@@ -5,8 +5,11 @@ import pytest
 from app.config import get_settings
 from app.core.errors import SpendCapExceeded
 from app.core.time import utc_now
-from app.models import APIUsage
-from app.services.cost import assert_within_cap, month_spend
+from app.models import APIUsage, Video
+from app.schemas.content import TopicCreate
+from app.services.cost import assert_within_cap, month_spend, record_usage, video_cost_rows
+from app.services.scripts import current_version, generate_script
+from app.services.topics import create_topic
 
 
 def _previous_month() -> str:
@@ -48,3 +51,41 @@ def test_previous_month_and_cache_do_not_count(db, monkeypatch):
     db.flush()
     assert month_spend(db) == Decimal("0")
     assert_within_cap(db, Decimal("1"))
+
+
+def test_cost_is_attributed_to_the_video(db):
+    topic = create_topic(db, TopicCreate(title="Tools change the work"))
+    script = generate_script(db, topic, language="en", video_format="short")
+    version = current_version(db, script)
+    video = Video(
+        script_id=script.id,
+        script_version_id=version.id,
+        language="en",
+        format="short",
+        profile="short_9_16",
+        status="ready",
+    )
+    db.add(video)
+    db.flush()
+    record_usage(
+        db,
+        provider="openai",
+        operation="script",
+        model="gpt-4o-mini",
+        cost="1.25",
+        script_id=script.id,
+    )
+    record_usage(
+        db,
+        provider="elevenlabs",
+        operation="voice",
+        model="eleven_multilingual_v2",
+        cost="0.50",
+        video_id=video.id,
+    )
+    record_usage(db, provider="openai", operation="other", model="gpt-4o-mini", cost="0.10")
+    rows, unassigned = video_cost_rows(db)
+    assert rows[0]["video"].id == video.id
+    assert rows[0]["cost"] == Decimal("1.75")
+    assert unassigned == Decimal("0.10")
+    assert month_spend(db) == Decimal("1.85")

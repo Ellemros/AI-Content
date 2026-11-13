@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.errors import AppError, DuplicateTopicError, NotApprovedError, QualityGateError
-from app.core.jobs import begin_job
+from app.core.jobs import begin_job, log_event
 from app.core.time import utc_now
 from app.domain import PROFILE_FOR_FORMAT, PROFILE_SIZE
 from app.models import Job, Script, Topic, Video
 from app.schemas.content import TopicCreate
+from app.services.cost import usage_scope
 from app.services.publisher import record_export
 from app.services.research.editorial import review_script
 from app.services.scripts import current_version, generate_script
@@ -118,6 +119,8 @@ def enqueue(
         force=force or component != "all",
     )
     job.video_id = video.id
+    if started and job.attempts > 1:
+        log_event(session, job, "retry", f"Retry attempt {job.attempts}.")
     if started and topic is not None and topic.status not in {"Rejected", "Published"}:
         topic.status = "In production"
     session.flush()
@@ -130,7 +133,8 @@ def run_render(session: Session, video_id: str) -> Video:
         raise AppError(f"Video {video_id} was not found.")
     job = session.scalar(select(Job).where(Job.video_id == video_id).order_by(Job.created_at.desc()))
     try:
-        render_video(session, video, job)
+        with usage_scope(script_id=video.script_id, video_id=video.id):
+            render_video(session, video, job)
         if job is not None:
             job.status = "succeeded"
             job.stage = "done"
@@ -149,6 +153,7 @@ def run_render(session: Session, video_id: str) -> Video:
         if job is not None:
             job.status = "failed"
             job.error = message
+            log_event(session, job, "failed", message, level="error")
         session.commit()
         logger.exception("render failed", extra={"video_id": video_id})
         raise

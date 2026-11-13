@@ -1,8 +1,11 @@
 """Subtitle cues timed to the narration, written as SRT."""
 
+import re
 from dataclasses import dataclass
 
 from app.services.textutil import split_sentences
+
+_STAMP = re.compile(r"(\d{2}):(\d{2}):(\d{2}),(\d{3})")
 
 
 @dataclass(frozen=True)
@@ -95,3 +98,51 @@ def render_srt(cues: list[Cue]) -> str:
         for cue in cues
     ]
     return "\n".join(blocks)
+
+
+def _parse_stamp(value: str) -> float:
+    match = _STAMP.search(value.strip())
+    if match is None:
+        raise ValueError(f"Unreadable timestamp: {value.strip()[:40]}")
+    hours, minutes, seconds, millis = (int(part) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000
+
+
+def parse_srt(text: str) -> list[Cue]:
+    body = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if body.startswith("\ufeff"):
+        body = body.lstrip("\ufeff")
+    if not body:
+        raise ValueError("Subtitles are empty.")
+    cues: list[Cue] = []
+    for block in re.split(r"\n\s*\n", body):
+        lines = [line for line in block.split("\n") if line.strip() != ""]
+        if not lines:
+            continue
+        if "-->" in lines[0]:
+            stamp, text_lines = lines[0], lines[1:]
+        elif len(lines) >= 2 and "-->" in lines[1]:
+            stamp, text_lines = lines[1], lines[2:]
+        else:
+            raise ValueError("A cue is missing a timestamp.")
+        start_raw, end_raw = stamp.split("-->", 1)
+        start = _parse_stamp(start_raw)
+        end = _parse_stamp(end_raw)
+        if end <= start:
+            raise ValueError("A cue ends before it starts.")
+        caption = "\n".join(line.strip() for line in text_lines).strip()
+        if not caption:
+            raise ValueError("A cue has no text.")
+        cues.append(Cue(len(cues) + 1, start, end, caption))
+    if not cues:
+        raise ValueError("Subtitles are empty.")
+    return cues
+
+
+def validate_cue_coverage(cues: list[Cue], duration: float) -> None:
+    end = cues[-1].end
+    if end < duration - 1.5 or end > duration + 1.0:
+        raise ValueError(
+            f"The last cue ends at {end:.2f}s and the narration is {duration:.2f}s. "
+            "Keep that cue within about a second and a half of the end so the burn stays in sync."
+        )

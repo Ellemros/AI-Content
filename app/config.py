@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     near_duplicate_threshold: float = 0.82
     font_path: str = ""
 
+    # The poller starts with the process. It only produces when the dashboard
+    # switch (seeded from this value) is on. Scheduled runs never approve or export.
+    scheduler_enabled: bool = False
+    scheduler_poll_seconds: float = 30.0
+
     # Content intelligence. Scores are heuristics. They are not search volume.
     topic_score_minimum: int = 55
     editorial_quality_minimum: int = 70

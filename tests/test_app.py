@@ -10,6 +10,10 @@ def test_dashboard_and_health(db):
         assert client.get("/health").json()["status"] == "ok"
         assert client.get("/topics").status_code == 200
         assert client.get("/analytics").status_code == 200
+        production = client.get("/production")
+        assert production.status_code == 200
+        assert "stops" in production.text.lower() or "approval" in production.text.lower()
+        assert client.get("/library").status_code == 200
         created = client.post(
             "/topics",
             data={

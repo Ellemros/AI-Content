@@ -1,4 +1,4 @@
-"""Generate one short vertical video from the command line."""
+"""Command line for renders, research, brand cycles, and schedules."""
 
 import argparse
 import os
@@ -13,12 +13,13 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import Brand, PublishedPost, Script, Video
+from app.models import Brand, ProductionSchedule, PublishedPost, Script, Video
 from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
 from app.services.production import produce_next
 from app.services.research import review_script, run_discovery
+from app.services.schedule import execute_schedule
 
 
 def _discover() -> int:
@@ -135,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     render.add_argument("--approve", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--export", action=argparse.BooleanOptionalAction, default=True)
     render.add_argument("--reuse", action="store_true")
+    scheduled = sub.add_parser(
+        "run-schedule",
+        help="Run one named schedule once. Stops before approval and does not export.",
+    )
+    scheduled.add_argument("--name", required=True)
     sub.add_parser("discover", help="Fetch configured public feeds and score topics. No video is rendered.")
     cycle = sub.add_parser("run-cycle", help="Score one brand's feeds. Does not render or upload.")
     cycle.add_argument("--slug", default="")
@@ -155,16 +161,33 @@ def main(argv: list[str] | None = None) -> int:
         return _produce_next(args.brand, args.opportunity)
     if args.command == "review-script":
         return _review(args.id)
-    if args.export and not args.approve:
+    if args.command == "render-short" and args.export and not args.approve:
         print("Export only happens after approval. Use --approve or --no-export.")
         return 2
-    if args.tts:
+    if getattr(args, "tts", None):
         os.environ["TTS_PROVIDER"] = args.tts
         get_settings.cache_clear()
     init_db()
     try:
         with session_scope() as session:
             seed(session)
+            if args.command == "run-schedule":
+                schedule = session.scalar(
+                    select(ProductionSchedule).where(ProductionSchedule.name == args.name)
+                )
+                if schedule is None:
+                    print(f"No schedule named {args.name}.")
+                    return 1
+                schedule = execute_schedule(session, schedule)
+                print(f"Schedule: {schedule.name}")
+                print(f"Status: {schedule.last_status}")
+                if schedule.last_error:
+                    print(schedule.last_error)
+                if schedule.last_video_id:
+                    print(f"Video id: {schedule.last_video_id}")
+                print("Approval: required before any export.")
+                print("Upload: not called.")
+                return 0 if schedule.last_status in {"ready", "skipped"} else 1
             video = produce_short(
                 session,
                 title=args.title,
