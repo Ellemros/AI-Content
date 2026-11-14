@@ -128,7 +128,42 @@ def _test_production(slug: str) -> int:
     return 0 if status == "succeeded" else 1
 
 
-def _produce_next(slug: str, opportunity_id: str) -> int:
+_KOKORO_RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
+
+
+def _install_voice() -> int:
+    """Download Kokoro-82M (Apache-2.0) for local narration. About 350 MB, once."""
+    import httpx
+
+    settings = get_settings()
+    targets = [
+        (Path(settings.kokoro_model_path), _KOKORO_RELEASE + "kokoro-v1.0.onnx", 300_000_000),
+        (Path(settings.kokoro_voices_path), _KOKORO_RELEASE + "voices-v1.0.bin", 25_000_000),
+    ]
+    for path, url, minimum in targets:
+        if path.is_file() and path.stat().st_size >= minimum:
+            print(f"Present: {path.resolve()}")
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(path.suffix + ".part")
+        print(f"Downloading {url}")
+        with httpx.stream("GET", url, follow_redirects=True, timeout=120) as response:
+            if response.status_code != 200:
+                print(f"Download failed: HTTP {response.status_code}.")
+                return 1
+            with partial.open("wb") as handle:
+                for chunk in response.iter_bytes(1 << 20):
+                    handle.write(chunk)
+        if partial.stat().st_size < minimum:
+            print(f"Download is too small: {partial.stat().st_size} bytes.")
+            return 1
+        partial.replace(path)
+        print(f"Saved: {path.resolve()}")
+    print(f"Kokoro is ready. Voice: {settings.kokoro_voice}. TTS_PROVIDER=auto now uses it for English.")
+    return 0
+
+
+def _produce_next(slug: str, opportunity_id: str, retry: bool = False) -> int:
     init_db()
     with session_scope() as session:
         seed(session)
@@ -137,7 +172,7 @@ def _produce_next(slug: str, opportunity_id: str) -> int:
             print("Brand was not found. No video was rendered or published.")
             return 1
         try:
-            job = produce_next(session, brand, opportunity_id=opportunity_id)
+            job = produce_next(session, brand, opportunity_id=opportunity_id, retry=retry)
         except AppError as exc:
             print(exc.message)
             return 1
@@ -152,8 +187,9 @@ def _produce_next(slug: str, opportunity_id: str) -> int:
         if job.video_id:
             video = session.get(Video, job.video_id)
             if video is not None and video.path:
-                print(f"Video: {video.path}")
+                print(f"Video: {Path(video.path).resolve()}")
                 print(f"Video status: {video.status}")
+                print(f"Dashboard: http://127.0.0.1:8000/production (job {job.id})")
         print("Published: no.")
         return 0 if job.status == "succeeded" else 1
 
@@ -217,6 +253,12 @@ def main(argv: list[str] | None = None) -> int:
     produce = sub.add_parser("produce-next", help="Render the next eligible opportunity. Does not publish.")
     produce.add_argument("--brand", required=True)
     produce.add_argument("--opportunity", default="")
+    produce.add_argument(
+        "--retry",
+        action="store_true",
+        help="Allow one more attempt for --opportunity after the attempt limit. Holds still apply.",
+    )
+    sub.add_parser("install-voice", help="Download the local Kokoro voice model (about 350 MB, once).")
     review = sub.add_parser("review-script", help="Score one script for originality and unsupported claims.")
     review.add_argument("--id", required=True)
     args = parser.parse_args(argv)
@@ -232,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "test-production":
         return _test_production(args.slug)
     if args.command == "produce-next":
-        return _produce_next(args.brand, args.opportunity)
+        if args.retry and not args.opportunity:
+            print("--retry needs --opportunity.")
+            return 2
+        return _produce_next(args.brand, args.opportunity, args.retry)
+    if args.command == "install-voice":
+        return _install_voice()
     if args.command == "review-script":
         return _review(args.id)
     if args.command == "render-short" and args.export and not args.approve:

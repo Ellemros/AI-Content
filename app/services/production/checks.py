@@ -178,12 +178,14 @@ def assess_production(
             required=False,
         )
     )
-    natural = voice_provider in {"elevenlabs", "voicestudio"}
+    natural = voice_provider in {"kokoro", "elevenlabs", "voicestudio"}
     voice_detail = f"Voice provider: {voice_provider or 'unknown'}."
+    if voice_provider == "kokoro":
+        voice_detail = "Kokoro-82M neural voice, local, Apache-2.0 weights."
     if voice_provider == "espeak":
         voice_detail = "espeak-ng is a robotic fallback. This video is not production-ready."
     elif voice_provider == "edge":
-        voice_detail = "Edge TTS is a local voice. ElevenLabs was not used."
+        voice_detail = "Edge TTS is Microsoft's online read-aloud voice. Its commercial terms are unclear."
     elif voice_provider == "voicestudio":
         voice_detail = "VoiceStudio spoke with a voice the operator marked as commercially usable."
     checks.append(_check("voice_provider", natural, voice_detail, required=False))

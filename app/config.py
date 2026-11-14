@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     elevenlabs_cost_per_1k_chars: float = 0.30
 
     tts_provider: str = "auto"
+    # Kokoro-82M (Apache-2.0) runs locally on CPU. `python -m app.cli install-voice` downloads it.
+    kokoro_model_path: Path = Path("./data/models/kokoro/kokoro-v1.0.onnx")
+    kokoro_voices_path: Path = Path("./data/models/kokoro/voices-v1.0.bin")
+    kokoro_voice: str = "af_heart"
+    kokoro_speed: float = 1.0
+    # Model script attempts per production job. The second attempt receives the reviewer's issues.
+    script_attempts: int = 2
     edge_voice_en: str = "en-US-AriaNeural"
     edge_voice_cs: str = "cs-CZ-VlastaNeural"
     espeak_bin: str = "espeak-ng"

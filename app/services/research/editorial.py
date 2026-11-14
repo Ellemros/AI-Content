@@ -120,6 +120,7 @@ def review_content(
         ]
         verified = bool(claim.get("verified")) and bool(sources)
         speculative = any(_contains(text, word) for word in _SPECULATION)
+        certainty = str(claim.get("certainty") or "").strip().lower()
         if verified and not speculative:
             kind = "confirmed"
             confirmed = True
@@ -127,6 +128,9 @@ def review_content(
             kind = "speculation"
         else:
             kind = "unverified"
+        # A sourced claim whose own wording hedges ("may", "could") is labelled honestly.
+        # Only a hedged statement that the script records as established is speculation stated as fact.
+        labelled_hedge = certainty == "hedged"
         evidence.append({"text": text, "kind": kind, "sources": sources})
         specific = bool(_SPECIFIC_CLAIM.search(text))
         if specific and not verified:
@@ -136,7 +140,7 @@ def review_content(
                     "detail": "A specific claim has no source URL. It cannot be spoken as fact.",
                 }
             )
-        if verified and speculative:
+        if verified and speculative and not labelled_hedge:
             issues.append(
                 {
                     "kind": "speculation_as_fact",
@@ -223,14 +227,15 @@ def review_content(
     }
 
 
-def _priors(session: Session, version_id: str) -> tuple[list[str], list[str], list[str]]:
-    """Compare only with scripts that already became a video.
+def priors(session: Session, *, exclude_script_id: str = "") -> tuple[list[str], list[str], list[str]]:
+    """Hooks, claims, and endings of other topics that already became a video.
 
-    A failed attempt writes a script and then stops. The next attempt of the same
-    topic must not be rejected for repeating that unrendered draft.
+    Earlier drafts of the same script are not repetition: a retry of one topic is
+    expected to say the same facts. Only other videos count.
     """
     produced = set(session.scalars(select(Video.script_id)).all())
-    rows = session.scalars(select(ScriptVersion).where(ScriptVersion.id != version_id)).all()
+    produced.discard(exclude_script_id)
+    rows = session.scalars(select(ScriptVersion).order_by(ScriptVersion.created_at)).all()
     hooks: list[str] = []
     claims: list[str] = []
     endings: list[str] = []
@@ -250,7 +255,7 @@ def review_script(session: Session, script: Script) -> EditorialReview:
     version = current_version(session, script)
     topic = session.get(Topic, script.topic_id)
     audience = topic.target_audience if topic is not None and topic.target_audience else "curious adults"
-    hooks, claims, endings = _priors(session, version.id)
+    hooks, claims, endings = priors(session, exclude_script_id=script.id)
     scenes = [str(scene.get("narration", "")) for scene in version.scenes or []]
     result = review_content(
         title=version.title,

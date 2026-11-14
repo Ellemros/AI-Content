@@ -16,29 +16,40 @@ from app.providers import elevenlabs as elevenlabs_provider
 from app.providers.local_tts import (
     edge_available,
     espeak_available,
+    kokoro_available,
     synthesize_edge,
     synthesize_espeak,
+    synthesize_kokoro,
 )
 from app.services.probes import media_summary, run_ffmpeg
 
 logger = logging.getLogger(__name__)
 
 
-def plan_engine(settings: Settings | None = None) -> str:
+def plan_engine(settings: Settings | None = None, language: str = "en") -> str:
+    """Pick the voice. auto never chooses a paid engine: Kokoro, then Edge, then espeak-ng.
+
+    ElevenLabs is used only when TTS_PROVIDER=elevenlabs is set explicitly.
+    """
     settings = settings or get_settings()
     choice = (settings.tts_provider or "auto").strip().lower()
     if choice == "auto":
-        if settings.elevenlabs_enabled():
-            return "elevenlabs"
+        if language == "en" and kokoro_available(settings):
+            return "kokoro"
         if edge_available():
             return "edge"
         if espeak_available(settings):
             return "espeak"
         raise AppError(
-            "No speech engine is available. Install espeak-ng or edge-tts, or set ELEVENLABS_API_KEY."
+            "No speech engine is available. Run `python -m app.cli install-voice` for Kokoro, "
+            "or install edge-tts or espeak-ng."
         )
-    if choice not in {"elevenlabs", "edge", "espeak", "voicestudio"}:
-        raise AppError("TTS_PROVIDER must be auto, elevenlabs, edge, espeak, or voicestudio.")
+    if choice not in {"elevenlabs", "edge", "espeak", "voicestudio", "kokoro"}:
+        raise AppError("TTS_PROVIDER must be auto, kokoro, elevenlabs, edge, espeak, or voicestudio.")
+    if choice == "kokoro" and not kokoro_available(settings):
+        raise AppError(
+            "TTS_PROVIDER=kokoro, but the model is missing. Run `python -m app.cli install-voice`."
+        )
     if choice == "elevenlabs" and not settings.elevenlabs_enabled():
         raise AppError("TTS_PROVIDER=elevenlabs requires ELEVENLABS_API_KEY.")
     if choice == "voicestudio":
@@ -72,6 +83,8 @@ def default_voice(settings: Settings, engine: str, language: str) -> str:
         if not voice:
             raise AppError("Set VOICESTUDIO_VOICE_ID to a saved VoiceStudio profile.")
         return voice
+    if engine == "kokoro":
+        return settings.kokoro_voice
     if engine == "edge":
         return settings.edge_voice_cs if language == "cs" else settings.edge_voice_en
     return settings.espeak_voice_cs if language == "cs" else settings.espeak_voice_en
@@ -113,6 +126,13 @@ def _trim(src: Path, dest: Path) -> None:
     trimmed.replace(dest)
     if src.resolve() != dest.resolve():
         src.unlink(missing_ok=True)
+
+
+def _resample(src: Path, dest: Path) -> None:
+    run_ffmpeg(["-i", str(src), "-ar", "48000", "-ac", "1", str(dest)])
+    if src.resolve() != dest.resolve():
+        src.unlink(missing_ok=True)
+        src.with_name(src.stem + ".alignment.json").unlink(missing_ok=True)
 
 
 def _read_alignment(raw: Path) -> dict | None:
@@ -211,6 +231,9 @@ def speak(
                 settings=settings,
                 reason=exc.message,
             )
+    if engine == "kokoro":
+        synthesize_kokoro(text, voice=voice, out_path=raw_path, settings=settings)
+        return "kokoro"
     if engine == "voicestudio":
         from app.providers.voicestudio import synthesize as synthesize_voicestudio
 
@@ -266,7 +289,7 @@ def ensure_audio(
     synthesizer: Callable[..., dict] | None = None,
 ) -> AudioFile:
     settings = get_settings()
-    planned = engine or plan_engine(settings)
+    planned = engine or plan_engine(settings, language)
     voice = voice_id.strip() or default_voice(settings, planned, language)
     digest = voice_hash(planned, voice, language, stability, similarity)
     existing = session.scalar(
@@ -293,7 +316,7 @@ def ensure_audio(
         warning = ""
     else:
         raw = directory / f"{version.id}-{digest[:12]}-raw.mp3"
-        if planned in {"espeak", "voicestudio"}:
+        if planned in {"espeak", "voicestudio", "kokoro"}:
             raw = raw.with_suffix(".wav")
         actual = speak(
             session,
@@ -307,7 +330,11 @@ def ensure_audio(
             settings=settings,
         )
         alignment = _read_alignment(raw)
-        _trim(raw, final_path)
+        if actual == "kokoro":
+            # Kokoro output is already trimmed per sentence. Trimming again would shift the alignment.
+            _resample(raw, final_path)
+        else:
+            _trim(raw, final_path)
         duration = media_summary(final_path)["duration"]
         warning = speak.last_warning if actual != planned else ""
         speak.last_warning = ""

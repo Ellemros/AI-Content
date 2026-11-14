@@ -137,6 +137,127 @@ def _tags(value) -> list[str]:
     return []
 
 
+ACTIONS = (
+    "walk",
+    "compare",
+    "choose",
+    "clock",
+    "notice",
+    "think",
+    "point",
+    "surprise",
+    "explain",
+    "celebrate",
+)
+_HEDGES = (
+    "might",
+    "could",
+    "may",
+    "possibly",
+    "maybe",
+    "suggest",
+    "suggests",
+    "suggested",
+    "likely",
+    "appear",
+    "appears",
+    "seem",
+    "seems",
+    "potentially",
+    "linked",
+    "associated",
+    "think",
+    "believe",
+    "hypothesis",
+    "preliminary",
+)
+
+
+def _source_match(sentence: str, source_sentences: list[str]) -> str:
+    """The source sentence that a script sentence most plausibly paraphrases, or ''."""
+    words = tokens(sentence)
+    if len(words) < 3:
+        return ""
+    best = ""
+    best_overlap = 0
+    for candidate in source_sentences:
+        overlap = len(words & tokens(candidate))
+        if overlap > best_overlap:
+            best, best_overlap = candidate, overlap
+    if best_overlap >= 3 and best_overlap >= 0.5 * len(words):
+        return best
+    return ""
+
+
+def dropped_hedges(texts: list[str], extracted: str) -> list[str]:
+    """Script sentences that state flatly what the matching source sentence hedges."""
+    source_sentences = split_sentences(extracted)
+    found = []
+    for text in texts:
+        for sentence in split_sentences(text) or [text]:
+            if hedged(sentence):
+                continue
+            match = _source_match(sentence, source_sentences)
+            if match and hedged(match):
+                found.append(sentence)
+    return found
+
+
+def _beat_items(value) -> list[dict]:
+    """Beats arrive as strings or as {text, action, label} objects."""
+    if isinstance(value, str):
+        return [{"text": line} for line in _lines(value)]
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            items.append({"text": item.strip()})
+        elif isinstance(item, dict):
+            text = str(item.get("text") or item.get("narration") or item.get("sentence") or "").strip()
+            if text:
+                items.append(
+                    {
+                        "text": text,
+                        "action": str(item.get("action") or "").strip().lower(),
+                        "label": str(item.get("label") or item.get("on_screen_text") or "").strip(),
+                    }
+                )
+    return items
+
+
+def _claim_items(value) -> list[dict]:
+    if isinstance(value, str):
+        return [{"text": line} for line in _lines(value)]
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    items = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            items.append({"text": item.strip()})
+        elif isinstance(item, dict):
+            text = str(item.get("text") or item.get("claim") or "").strip()
+            if text:
+                items.append({"text": text, "certainty": str(item.get("certainty") or "").strip().lower()})
+    return items
+
+
+def hedged(text: str) -> bool:
+    folded = text.casefold()
+    return any(re.search(rf"\b{word}\b", folded) for word in _HEDGES)
+
+
+def _certainty(text: str, stated: str) -> str:
+    # Wording decides. A claim that says "may" is hedged even if the model labelled it established.
+    if hedged(text):
+        return "hedged"
+    return "established" if stated in {"", "established"} else "hedged"
+
+
 def narration_from_source(
     *,
     title: str,
@@ -144,41 +265,68 @@ def narration_from_source(
     url: str,
     language: str,
     complete=None,
+    feedback: str = "",
+    allow_fallback: bool = True,
 ) -> dict:
+    """Return an original model script, or the labelled dossier fallback.
+
+    With allow_fallback=False a rejected model script raises instead, so the caller
+    can ask for a revision rather than rendering stitched source sentences.
+    """
     rejected = ""
     if complete is not None:
         try:
-            draft = _script_object(complete(title=title, extracted=extracted, url=url, language=language))
+            kwargs = {"title": title, "extracted": extracted, "url": url, "language": language}
+            if feedback:
+                kwargs["feedback"] = feedback
+            draft = _script_object(complete(**kwargs))
+            beat_items = _beat_items(draft.get("beats"))
             narration = str(draft.get("narration") or "").strip()
-            beats = _lines(draft.get("beats"))
-            if len(beats) < 4:
-                beats = split_sentences(narration)
+            if len(beat_items) >= 4:
+                # The beats are the narration. One source of truth keeps scenes and speech in sync.
+                narration = " ".join(item["text"] for item in beat_items)
+            else:
+                beat_items = [{"text": line} for line in split_sentences(narration)]
+            beats = [item["text"] for item in beat_items]
             _grounded(narration, extracted, title)
+            written = str(draft.get("narration") or "").strip()
+            if written and written != narration:
+                # A model that invents a number anywhere in its answer is not trusted, spoken or not.
+                _grounded(written, extracted, title)
             if len(narration.split()) < 40:
                 raise AppError("The original script is too short to carry one idea.")
             claims = []
-            for text in _lines(draft.get("claims")):
+            for item in _claim_items(draft.get("claims")):
+                text = item["text"]
                 overlap = tokens(text) & tokens(extracted)
                 if len(overlap) < 3:
-                    raise AppError("A model claim is not grounded in the source page.")
+                    raise AppError(f"A model claim is not grounded in the source page: {text[:120]}")
                 if _numbers(text) - _numbers(extracted) - _numbers(title):
-                    raise AppError("A model claim adds a number that is not in the source.")
+                    raise AppError(f"A model claim adds a number that is not in the source: {text[:120]}")
                 claims.append(
                     {
                         "text": text,
                         "sources": [url],
                         "verified": True,
                         "unverified": False,
+                        "certainty": _certainty(text, item.get("certainty", "")),
                     }
                 )
             if not claims:
                 raise AppError("The original script did not record a grounded claim.")
+            flat = dropped_hedges(beats + [claim["text"] for claim in claims], extracted)
+            if flat:
+                raise AppError(
+                    "The script states as certain what the source only suggests. Restore the hedge in: "
+                    + " | ".join(dict.fromkeys(flat))[:300]
+                )
             queries = _queries(draft.get("visual_queries"))
             return {
                 "title": str(draft.get("title") or title)[:200],
-                "hook": str(draft.get("hook") or beats[0]),
+                "hook": beats[0],
                 "narration": narration,
-                "beats": beats[:6],
+                "beats": beats[:8],
+                "beat_directions": beat_items[:8],
                 "claims": claims,
                 "description": str(draft.get("description") or f"{title}. Source: {url}"),
                 "hashtags": _tags(draft.get("hashtags")),
@@ -191,26 +339,34 @@ def narration_from_source(
             rejected = exc.message
         except (AttributeError, TypeError, KeyError) as exc:
             rejected = f"The model script could not be read ({exc})."
+        if not allow_fallback:
+            raise AppError(rejected or "The model script was rejected.")
     compiled = compile_from_dossier(title=title, extracted=extracted, url=url, language=language)
     compiled["rejected_model"] = rejected
     return compiled
 
 
-def plan_scenes(beats: list[str], queries: list[str] | None = None) -> list[dict]:
+def plan_scenes(
+    beats: list[str], queries: list[str] | None = None, directions: list[dict] | None = None
+) -> list[dict]:
     scenes: list[dict] = []
     supplied = queries or []
+    directed = directions or []
     for index, beat in enumerate(beats, start=1):
         motifs = list(tokens(beat))[:4]
-        label = " ".join(motifs[:3])[:32]
+        direction = directed[index - 1] if index - 1 < len(directed) else {}
+        label = str(direction.get("label") or "").strip()[:28] or " ".join(motifs[:3])[:28]
+        action = str(direction.get("action") or "").strip().lower()
         query = supplied[index - 1] if index - 1 < len(supplied) else " ".join(motifs[:4])
-        scenes.append(
-            {
-                "index": index,
-                "narration": beat,
-                "visual": _KINDS[(index - 1) % len(_KINDS)],
-                "motifs": motifs,
-                "visual_query": query[:80] or "close detail",
-                "on_screen_text": label or "source",
-            }
-        )
+        scene = {
+            "index": index,
+            "narration": beat,
+            "visual": _KINDS[(index - 1) % len(_KINDS)],
+            "motifs": motifs,
+            "visual_query": query[:80] or "close detail",
+            "on_screen_text": label or "source",
+        }
+        if action in ACTIONS:
+            scene["action"] = action
+        scenes.append(scene)
     return scenes
