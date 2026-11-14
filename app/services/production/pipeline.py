@@ -118,6 +118,7 @@ def _produced_titles(session: Session, brand_id: str) -> list[str]:
             .where(
                 ProductionJob.brand_id == brand_id,
                 ProductionJob.status.in_(("succeeded", "running")),
+                ContentOpportunity.status != "test",
             )
         ).all()
     )
@@ -177,6 +178,8 @@ def produce_next(
     fetch=None,
     synthesizer=None,
     stock_client=None,
+    allow_placeholder: bool = True,
+    test_run: bool = False,
 ) -> ProductionJob | None:
     if brand.status == "paused":
         raise AppError(f"{brand.name} is paused. No video was rendered.")
@@ -204,6 +207,8 @@ def produce_next(
         fetch=fetch or _fetch_page,
         synthesizer=synthesizer,
         stock_client=stock_client,
+        allow_placeholder=allow_placeholder,
+        test_run=test_run,
     )
 
 
@@ -224,6 +229,8 @@ def _produce(
     fetch,
     synthesizer,
     stock_client,
+    allow_placeholder: bool = True,
+    test_run: bool = False,
 ) -> ProductionJob:
     lock = _opportunity_lock(opportunity.id)
     if not lock.acquire(blocking=False):
@@ -284,6 +291,8 @@ def _produce(
                 fetch=fetch,
                 synthesizer=synthesizer,
                 stock_client=stock_client,
+                allow_placeholder=allow_placeholder,
+                test_run=test_run,
             )
         except Exception as exc:
             message = getattr(exc, "message", None) or str(exc)
@@ -307,7 +316,18 @@ def _produce(
         lock.release()
 
 
-def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) -> None:
+def _run(
+    session,
+    job,
+    brand,
+    opportunity,
+    *,
+    fetch,
+    synthesizer,
+    stock_client,
+    allow_placeholder: bool = True,
+    test_run: bool = False,
+) -> None:
     if opportunity.status == "held" or (opportunity.hold_reason or "").strip():
         job.stage = "select"
         raise AppError(opportunity.hold_reason or "This opportunity is held.")
@@ -360,7 +380,22 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
     work = get_settings().data_dir / "production" / job.id
     work.mkdir(parents=True, exist_ok=True)
     job.stage = "visuals"
-    images, asset_ids, kinds, clip_ids = _visuals(session, job, scenes, work)
+    images, asset_ids, kinds, clip_ids = _visuals(
+        session, job, scenes, work, allow_placeholder=allow_placeholder
+    )
+    if not allow_placeholder and any(kind != "clip" for kind in kinds):
+        _finish_without_substitute(
+            job,
+            opportunity,
+            scenes,
+            kinds,
+            clip_ids,
+            draft,
+            audio,
+            dossier,
+            test_run=test_run,
+        )
+        return
     job.stage = "render"
     durations = durations_for(scenes, audio.duration_seconds)
     srt_path = work / "captions.srt"
@@ -464,6 +499,8 @@ def _run(session, job, brand, opportunity, *, fetch, synthesizer, stock_client) 
         "warnings": report.get("warnings") or [],
         "semantic_visual": report.get("semantic_visual") or "unverified",
     }
+    if test_run:
+        job.report = {**job.report, "test_run": True, "published": False, "ready_for_publishing": False}
     topic.status = "In production"
     if quality_status == "failed":
         video.status = "blocked"
@@ -809,7 +846,80 @@ def _remember_gap(scene, work: Path, images, asset_ids, kinds, clip_ids, session
     clip_ids.append("")
 
 
-def _visuals(session, job, scenes, work: Path):
+def _note_gap(scene, images, asset_ids, kinds, clip_ids) -> None:
+    scene["footage"] = missing_record()
+    images.append(None)
+    asset_ids.append("")
+    kinds.append("missing")
+    clip_ids.append("")
+
+
+def _missing_footage_lines(scenes: list[dict], kinds: list[str]) -> list[str]:
+    lines = []
+    for scene, kind in zip(scenes, kinds, strict=False):
+        if kind == "clip":
+            continue
+        query = str(scene.get("visual_query") or scene.get("narration") or "this scene").strip()
+        lines.append(f'Scene {scene.get("index")}: no eligible licensed clip matched "{query[:120]}".')
+    return lines
+
+
+def _finish_without_substitute(
+    job,
+    opportunity,
+    scenes,
+    kinds,
+    clip_ids,
+    draft,
+    audio,
+    dossier,
+    *,
+    test_run: bool,
+) -> None:
+    """Stop before render when a test has no licensed clip. Do not draw a substitute card."""
+    lines = _missing_footage_lines(scenes, kinds)
+    explanation = (
+        "Licensed footage is missing, so no MP4 was written. "
+        "No illustrated card was substituted. " + " ".join(lines)
+    )
+    visual = "missing-footage" if "clip" not in kinds else "local-stock+missing-footage"
+    fallbacks = []
+    if draft.get("script_mode") != "original":
+        fallbacks.append("script")
+    if audio.provider != "elevenlabs":
+        fallbacks.append("voice")
+    fallbacks.append("footage")
+    job.report = {
+        "test_run": test_run,
+        "published": False,
+        "ready_for_publishing": False,
+        "quality_status": "needs_review",
+        "warnings": lines,
+        "missing_footage": lines,
+        "explanation": explanation,
+        "video_path": "",
+        "providers": [draft["provider"], audio.provider, visual],
+        "script_provider": draft["provider"],
+        "script_mode": draft.get("script_mode") or "fallback",
+        "voice_provider": audio.provider,
+        "voice_name": audio.voice_id,
+        "visual_provider": visual,
+        "unique_clips": len({item for item in clip_ids if item}),
+        "clips": [scene.get("footage") for scene in scenes if isinstance(scene.get("footage"), dict)],
+        "fallbacks": fallbacks,
+        "scenes": scenes,
+        "dossier_id": dossier.id,
+        "semantic_visual": "unverified",
+    }
+    opportunity.production_status = "needs_review"
+    opportunity.production_block_reason = explanation[:2000]
+    job.status = "succeeded"
+    job.stage = "saved"
+    job.error = ""
+    job.finished_at = utc_now()
+
+
+def _visuals(session, job, scenes, work: Path, *, allow_placeholder: bool = True):
     images: list[Path] = []
     asset_ids: list[str] = []
     kinds: list[str] = []
@@ -838,7 +948,10 @@ def _visuals(session, job, scenes, work: Path):
                     used.add(fetched.id)
                     _remember_clip(scene, fetched, images, asset_ids, kinds, clip_ids)
                     continue
-            _remember_gap(scene, work, images, asset_ids, kinds, clip_ids, session)
+            if allow_placeholder:
+                _remember_gap(scene, work, images, asset_ids, kinds, clip_ids, session)
+            else:
+                _note_gap(scene, images, asset_ids, kinds, clip_ids)
     finally:
         if owned is not None:
             owned.close()
