@@ -37,10 +37,19 @@ def plan_engine(settings: Settings | None = None) -> str:
         raise AppError(
             "No speech engine is available. Install espeak-ng or edge-tts, or set ELEVENLABS_API_KEY."
         )
-    if choice not in {"elevenlabs", "edge", "espeak"}:
-        raise AppError("TTS_PROVIDER must be auto, elevenlabs, edge, or espeak.")
+    if choice not in {"elevenlabs", "edge", "espeak", "voicestudio"}:
+        raise AppError("TTS_PROVIDER must be auto, elevenlabs, edge, espeak, or voicestudio.")
     if choice == "elevenlabs" and not settings.elevenlabs_enabled():
         raise AppError("TTS_PROVIDER=elevenlabs requires ELEVENLABS_API_KEY.")
+    if choice == "voicestudio":
+        if settings.voicestudio_commercial_use.strip().lower() != "yes":
+            raise AppError(
+                "VoiceStudio stays off until VOICESTUDIO_COMMERCIAL_USE=yes. "
+                "The default OmniVoice weights are CC-BY-NC and are not cleared for this brand."
+            )
+        if not settings.voicestudio_url.strip() or not settings.voicestudio_voice_id.strip():
+            raise AppError("VoiceStudio needs VOICESTUDIO_URL and VOICESTUDIO_VOICE_ID.")
+        return "voicestudio"
     if choice == "espeak" and not espeak_available(settings):
         raise AppError("espeak-ng is not installed.")
     if choice == "edge" and not edge_available():
@@ -58,6 +67,11 @@ def default_voice(settings: Settings, engine: str, language: str) -> str:
                 "Set ELEVENLABS_DEFAULT_VOICE_ID, or ELEVENLABS_VOICE_ID_EN and ELEVENLABS_VOICE_ID_CS."
             )
         return voice.strip()
+    if engine == "voicestudio":
+        voice = settings.voicestudio_voice_id.strip()
+        if not voice:
+            raise AppError("Set VOICESTUDIO_VOICE_ID to a saved VoiceStudio profile.")
+        return voice
     if engine == "edge":
         return settings.edge_voice_cs if language == "cs" else settings.edge_voice_en
     return settings.espeak_voice_cs if language == "cs" else settings.espeak_voice_en
@@ -139,6 +153,11 @@ def speak(
             settings=settings,
         )
         return "elevenlabs"
+    if engine == "voicestudio":
+        from app.providers.voicestudio import synthesize as synthesize_voicestudio
+
+        synthesize_voicestudio(text, voice=voice, out_path=raw_path, settings=settings)
+        return "voicestudio"
     if engine == "edge":
         try:
             synthesize_edge(
@@ -215,7 +234,7 @@ def ensure_audio(
         alignment = meta.get("alignment") if isinstance(meta.get("alignment"), dict) else None
     else:
         raw = directory / f"{version.id}-{digest[:12]}-raw.mp3"
-        if planned == "espeak":
+        if planned in {"espeak", "voicestudio"}:
             raw = raw.with_suffix(".wav")
         actual = speak(
             session,

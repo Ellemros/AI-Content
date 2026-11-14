@@ -81,7 +81,10 @@ class Settings(BaseSettings):
     production_daily_cap_usd: float = 5.0
     production_stock: str = "none"
     # local uses the licensed library. pexels stays off unless this is set to pexels and a key exists.
-    production_footage: str = "local"
+    production_footage: str = "stickman"
+    voicestudio_url: str = ""
+    voicestudio_voice_id: str = ""
+    voicestudio_commercial_use: str = ""
     pexels_api_key: str = ""
 
     video_fps: int = Field(default=30)

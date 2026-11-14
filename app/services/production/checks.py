@@ -120,16 +120,43 @@ def assess_production(
             checks.append(_check("aspect_ratio", False, str(exc)[:200]))
     checks.append(_check("visual_motion", moved, moved_detail))
     kinds = visual_kinds or []
+    animated = bool(kinds) and all(kind == "stickman" for kind in kinds)
     clip_count = sum(1 for kind in kinds if kind == "clip")
-    missing = sum(1 for kind in kinds if kind != "clip")
+    missing = sum(1 for kind in kinds if kind not in {"clip", "stickman"})
     unique_ids = {item for item in (clip_ids or []) if item}
-    footage_ok = (
-        bool(kinds)
-        and clip_count == len(kinds)
-        and len(unique_ids) == clip_count
-        and clip_count >= min(4, len(kinds))
-    )
-    if not kinds:
+    if animated:
+        moved_scenes = []
+        for path in scene_paths:
+            if not path.is_file():
+                moved_scenes.append(False)
+                continue
+            scene_moved, _detail = motion_differs(path)
+            moved_scenes.append(scene_moved)
+        stickman_ok = bool(moved_scenes) and all(moved_scenes)
+        checks.append(
+            _check(
+                "stickman_motion",
+                stickman_ok,
+                f"{sum(moved_scenes)} of {len(kinds)} stickman scenes move.",
+            )
+        )
+        footage_ok = stickman_ok and len(kinds) >= 4
+        if stickman_ok:
+            footage_detail = (
+                f"{len(kinds)} stickman scenes were animated from the narration. No stock clip was required."
+            )
+        else:
+            footage_detail = "A stickman scene did not move, so the animation is incomplete."
+    else:
+        footage_ok = (
+            bool(kinds)
+            and clip_count == len(kinds)
+            and len(unique_ids) == clip_count
+            and clip_count >= min(4, len(kinds))
+        )
+    if animated:
+        pass
+    elif not kinds:
         footage_detail = "Visual kind was not recorded."
     elif missing:
         footage_detail = (
@@ -151,12 +178,14 @@ def assess_production(
             required=False,
         )
     )
-    natural = voice_provider == "elevenlabs"
+    natural = voice_provider in {"elevenlabs", "voicestudio"}
     voice_detail = f"Voice provider: {voice_provider or 'unknown'}."
     if voice_provider == "espeak":
         voice_detail = "espeak-ng is a robotic fallback. This video is not production-ready."
     elif voice_provider == "edge":
         voice_detail = "Edge TTS is a local voice. ElevenLabs was not used."
+    elif voice_provider == "voicestudio":
+        voice_detail = "VoiceStudio spoke with a voice the operator marked as commercially usable."
     checks.append(_check("voice_provider", natural, voice_detail, required=False))
     ass_path = subtitle_path.with_suffix(".ass")
     ass_text = ass_path.read_text(encoding="utf-8") if ass_path.is_file() else ""
@@ -185,6 +214,6 @@ def assess_production(
         "status": status,
         "checks": checks,
         "warnings": warnings,
-        "semantic_visual": "unverified",
+        "semantic_visual": "directed-from-narration" if animated else "unverified",
         "checksum": technical.get("checksum", ""),
     }
