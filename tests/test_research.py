@@ -4,11 +4,11 @@ import httpx
 import pytest
 from app.config import get_settings
 from app.core.errors import QualityGateError
-from app.models import DiscoveredItem, ResearchSource, Topic
+from app.models import DiscoveredItem, ResearchSource, Script, ScriptVersion, Topic, Video
 from app.schemas.content import TopicCreate
 from app.services.offline_scripts import build_offline_script
 from app.services.research.discover import run_discovery
-from app.services.research.editorial import review_content
+from app.services.research.editorial import review_content, review_script
 from app.services.research.feeds import FetchResult, ParsedItem, check_url, parse_feed
 from app.services.research.scoring import score_topic
 from app.services.topics import create_topic
@@ -278,8 +278,7 @@ def test_offline_scripts_pass_and_slop_fails():
         title="How models learn from examples",
         hook="A model is a pattern, not a mind.",
         narration=(
-            "A model is a pattern, not a mind. "
-            "The useful habit is to check the source before you repeat it."
+            "A model is a pattern, not a mind. The useful habit is to check the source before you repeat it."
         ),
         scenes=["Check the source."],
         claims=[{"text": "Models can be wrong.", "sources": [], "verified": False, "unverified": True}],
@@ -315,6 +314,59 @@ def test_editorial_gate_blocks_a_new_render(db, monkeypatch):
             approve=False,
             export=False,
         )
+
+
+def _draft(db, title: str, hook: str) -> Script:
+    topic = create_topic(db, TopicCreate(title=title, category="facts"))
+    script = Script(topic_id=topic.id, language="en", format="short", title=title, status="draft")
+    db.add(script)
+    db.flush()
+    version = ScriptVersion(
+        script_id=script.id,
+        version_number=1,
+        title=title,
+        hook=hook,
+        narration=f"{hook} Checking the default is a habit for ordinary decisions about time.",
+        scenes=[{"narration": hook}],
+        factual_claims=[{"text": "People keep the selected option.", "sources": [], "verified": False}],
+        cta="Notice the default before you accept it.",
+    )
+    db.add(version)
+    db.flush()
+    script.current_version_id = version.id
+    return script
+
+
+def test_unrendered_draft_does_not_block_the_next_script(db):
+    hook = "People keep the option that was already selected."
+    _draft(db, "Route planning", hook)
+    second = _draft(db, "Museum lighting", hook)
+    review = review_script(db, second)
+    kinds = {issue["kind"] for issue in review.issues}
+    assert "repetitive_opening" not in kinds
+    assert "repeated_fact" not in kinds
+    assert "repeated_conclusion" not in kinds
+
+
+def test_rendered_video_still_counts_as_a_prior(db):
+    hook = "People keep the option that was already selected."
+    first = _draft(db, "Battery cooling", hook)
+    version = db.get(ScriptVersion, first.current_version_id)
+    db.add(
+        Video(
+            script_id=first.id,
+            script_version_id=version.id,
+            language="en",
+            format="short",
+            profile="short",
+            path="data/renders/prior.mp4",
+        )
+    )
+    db.flush()
+    second = _draft(db, "Library shelves", hook)
+    review = review_script(db, second)
+    kinds = {issue["kind"] for issue in review.issues}
+    assert "repetitive_opening" in kinds
 
 
 def test_research_page_states_the_limit(db):

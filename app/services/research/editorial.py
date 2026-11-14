@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import EditorialReview, Script, ScriptVersion, Topic
+from app.models import EditorialReview, Script, ScriptVersion, Topic, Video
 from app.services.scripts import current_version
 from app.services.textutil import fold, sequence_ratio, split_sentences, tokens, words
 
@@ -59,9 +59,10 @@ def _contains(text: str, phrase: str) -> bool:
     folded_phrase = fold(phrase)
     if " " in phrase or "-" in phrase:
         return phrase.casefold() in raw or (folded_phrase != "" and folded_phrase in folded)
-    return re.search(rf"\b{re.escape(phrase.casefold())}\b", raw) is not None or re.search(
-        rf"\b{re.escape(folded_phrase)}\b", folded
-    ) is not None
+    return (
+        re.search(rf"\b{re.escape(phrase.casefold())}\b", raw) is not None
+        or re.search(rf"\b{re.escape(folded_phrase)}\b", folded) is not None
+    )
 
 
 def _jaccard_text(left: str, right: str) -> float:
@@ -114,7 +115,9 @@ def review_content(
     confirmed = False
     for claim in claims:
         text = str(claim.get("text", "")).strip()
-        sources = [str(item) for item in claim.get("sources", []) if str(item).startswith(("http://", "https://"))]
+        sources = [
+            str(item) for item in claim.get("sources", []) if str(item).startswith(("http://", "https://"))
+        ]
         verified = bool(claim.get("verified")) and bool(sources)
         speculative = any(_contains(text, word) for word in _SPECULATION)
         if verified and not speculative:
@@ -221,11 +224,19 @@ def review_content(
 
 
 def _priors(session: Session, version_id: str) -> tuple[list[str], list[str], list[str]]:
+    """Compare only with scripts that already became a video.
+
+    A failed attempt writes a script and then stops. The next attempt of the same
+    topic must not be rejected for repeating that unrendered draft.
+    """
+    produced = set(session.scalars(select(Video.script_id)).all())
     rows = session.scalars(select(ScriptVersion).where(ScriptVersion.id != version_id)).all()
     hooks: list[str] = []
     claims: list[str] = []
     endings: list[str] = []
     for row in rows[-300:]:
+        if row.script_id not in produced:
+            continue
         hooks.append(row.hook or "")
         endings.append(_ending(row.narration or ""))
         for claim in row.factual_claims or []:
