@@ -109,9 +109,16 @@ def cues_from_alignment(alignment: dict, duration: float) -> list[Cue]:
             start = float(raw_start)
             continue
         if not buffer:
+            if char == " ":
+                continue
             start = float(raw_start)
         buffer += str(char)
         end = float(raw_end)
+        # A cue never runs across the end of a sentence, and a long clause ends at its comma.
+        stripped = buffer.strip()
+        if (char in ".!?" and len(stripped) >= 6) or (char in ",;:" and len(stripped) >= 18):
+            phrases.append((start, end, stripped))
+            buffer = ""
     if buffer.strip():
         phrases.append((start, end, buffer.strip()))
     if not phrases:
@@ -133,16 +140,34 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{hundredths:02d}"
 
 
-def _highlight(text: str) -> str:
+def _highlight(text: str, accent: str = "&H0060C8FF&", base: str = "&H00FFFFFF&") -> str:
     words = [word for word in text.replace("\n", " ").split() if len(word) >= 5]
     spoken = text.replace("\n", r"\N")
     if not words:
         return spoken
     pick = max(words, key=len)
-    return spoken.replace(pick, "{\\c&H0060C8FF&}" + pick + "{\\c&H00FFFFFF&}", 1)
+    return spoken.replace(pick, "{\\c" + accent + "}" + pick + "{\\c" + base + "}", 1)
 
 
-def render_ass(cues: list[Cue]) -> str:
+# Light-paper films (stickman) need dark ink captions; white text vanishes on the paper.
+_STYLES = {
+    "dark": (
+        "Style: Main,DejaVu Sans,64,&H00FFFFFF,&H000000FF,&H00101820,&H64000000,"
+        "0,0,0,0,100,100,0,0,1,4,0,2,90,90,320,1",
+        "&H0060C8FF&",
+        "&H00FFFFFF&",
+    ),
+    "light": (
+        "Style: Main,DejaVu Sans,68,&H001C1C1C,&H000000FF,&H00EAF1F4,&H00EAF1F4,"
+        "-1,0,0,0,100,100,0,0,1,6,0,2,90,90,320,1",
+        "&H006A6F1F&",
+        "&H001C1C1C&",
+    ),
+}
+
+
+def render_ass(cues: list[Cue], background: str = "dark") -> str:
+    style, accent, base = _STYLES.get(background, _STYLES["dark"])
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -154,15 +179,15 @@ def render_ass(cues: list[Cue]) -> str:
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
         "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Main,DejaVu Sans,64,&H00FFFFFF,&H000000FF,&H00101820,&H64000000,"
-        "0,0,0,0,100,100,0,0,1,4,0,2,90,90,320,1",
+        style,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     for cue in cues:
         lines.append(
-            f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Main,,0,0,0,,{_highlight(cue.text)}"
+            f"Dialogue: 0,{_ass_time(cue.start)},{_ass_time(cue.end)},Main,,0,0,0,,"
+            f"{_highlight(cue.text, accent, base)}"
         )
     return "\n".join(lines) + "\n"
 

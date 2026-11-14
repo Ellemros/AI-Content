@@ -49,10 +49,10 @@ from app.services.production.footage import (
     recent_clip_ids,
     write_missing_slate,
 )
-from app.services.production.scripting import narration_from_source, plan_scenes
+from app.services.production.scripting import ACTIONS, narration_from_source, plan_scenes
 from app.services.production.speech import speakable
 from app.services.production.stickman import render_stickman_scenes, stickman_enabled, write_scene_sfx
-from app.services.research.editorial import review_script
+from app.services.research.editorial import priors, review_content, review_script
 from app.services.textutil import jaccard
 from app.services.topics import create_topic
 from app.services.voice import ensure_audio
@@ -181,6 +181,7 @@ def produce_next(
     stock_client=None,
     allow_placeholder: bool = True,
     test_run: bool = False,
+    retry: bool = False,
 ) -> ProductionJob | None:
     if brand.status == "paused":
         raise AppError(f"{brand.name} is paused. No video was rendered.")
@@ -210,6 +211,7 @@ def produce_next(
         stock_client=stock_client,
         allow_placeholder=allow_placeholder,
         test_run=test_run,
+        retry=retry and bool(opportunity_id),
     )
 
 
@@ -232,6 +234,7 @@ def _produce(
     stock_client,
     allow_placeholder: bool = True,
     test_run: bool = False,
+    retry: bool = False,
 ) -> ProductionJob:
     lock = _opportunity_lock(opportunity.id)
     if not lock.acquire(blocking=False):
@@ -257,7 +260,7 @@ def _produce(
             .where(ProductionJob.opportunity_id == opportunity.id)
         )
         limit = int(brand.max_attempts or 2)
-        if int(prior or 0) >= limit:
+        if int(prior or 0) >= limit and not retry:
             latest = session.scalar(
                 select(ProductionJob)
                 .where(ProductionJob.opportunity_id == opportunity.id)
@@ -350,21 +353,15 @@ def _run(
     dossier = _save_dossier(session, opportunity, item, status, text, quotes)
     language = brand.language if brand.language in LANGUAGES else "en"
     job.stage = "script"
-    draft = narration_from_source(
-        title=opportunity.title,
-        extracted=dossier.extracted_text,
-        url=item.url,
-        language=brand.language if brand.language in _FRAMES_LANGS else language,
-        complete=_model_writer(session, job),
-    )
+    topic = _topic(session, brand, opportunity, item, language)
+    draft = _write_script(session, job, brand, topic, opportunity, item, dossier, language)
     if len(draft["beats"]) < 4:
         raise AppError("The script did not produce enough scenes.")
-    scenes = plan_scenes(draft["beats"], draft.get("visual_queries"))
+    scenes = plan_scenes(draft["beats"], draft.get("visual_queries"), draft.get("beat_directions"))
     add_cost(session, job, provider=draft["provider"], operation="script", cost=0)
-    topic = _topic(session, brand, opportunity, item, language)
     script, version = _script(session, topic, language, draft, scenes)
     job.script_id = script.id
-    editorial_warning = _apply_editorial_gate(session, brand, script)
+    editorial_warning = _apply_editorial_gate(session, brand, script, required=draft["provider"] == "openai")
     job.stage = "narration"
     _reserve_voice_budget(session, job, draft["narration"])
     voice_id = _brand_voice(brand, language)
@@ -381,7 +378,7 @@ def _run(
     work = get_settings().data_dir / "production" / job.id
     work.mkdir(parents=True, exist_ok=True)
     job.stage = "visuals"
-    durations = durations_for(scenes, audio.duration_seconds)
+    durations = _spoken_durations(scenes, audio) or durations_for(scenes, audio.duration_seconds)
     sfx = None
     if stickman_enabled():
         images, asset_ids, kinds, clip_ids = render_stickman_scenes(scenes, durations, work)
@@ -407,7 +404,13 @@ def _run(
     job.stage = "render"
     srt_path = work / "captions.srt"
     alignment = (audio.metadata_json or {}).get("alignment")
-    write_subtitles(speakable(version.narration), audio.duration_seconds, srt_path, alignment=alignment)
+    write_subtitles(
+        speakable(version.narration),
+        audio.duration_seconds,
+        srt_path,
+        alignment=alignment,
+        background="light" if all(kind == "stickman" for kind in kinds) else "dark",
+    )
     music = build_music(
         session,
         mood=version.music_mood or "curious",
@@ -472,7 +475,7 @@ def _run(
     fallbacks = []
     if draft.get("script_mode") != "original":
         fallbacks.append("script")
-    if audio.provider != "elevenlabs":
+    if audio.provider not in _PRODUCTION_VOICES:
         fallbacks.append("voice")
     if any(kind not in {"clip", "stickman"} for kind in kinds):
         fallbacks.append("footage")
@@ -496,6 +499,7 @@ def _run(
     job.report = {
         "providers": providers,
         "rejected_model": draft.get("rejected_model") or "",
+        "script_attempts": draft.get("attempts") or [],
         "scenes": scenes,
         "metadata": metadata,
         "quality": report,
@@ -551,25 +555,136 @@ def _run(
 _FRAMES_LANGS = {"en", "cs"}
 
 
-def _apply_editorial_gate(session: Session, brand: Brand, script: Script) -> str:
-    """Record a low editorial score. The film is still rendered and kept out of ready."""
+_PRODUCTION_VOICES = {"kokoro", "elevenlabs", "voicestudio"}
+
+
+def _apply_editorial_gate(session: Session, brand: Brand, script: Script, *, required: bool = False) -> str:
+    """Store an editorial review. A failing original script stops the job before narration.
+
+    `required` is true for model scripts: they already had a revision round, so a
+    failure here is final. A labelled dossier fallback is reviewed and kept at
+    needs_review, as before, so an offline render still works.
+    """
     settings = get_settings()
     editorial = brand.editorial if isinstance(brand.editorial, dict) else {}
     brand_gate = bool(editorial.get("gate"))
     minimum = editorial.get("minimum")
-    if not settings.editorial_gate and not brand_gate and minimum is None:
-        return ""
     review = review_script(session, script)
-    required = review.threshold
+    threshold = review.threshold
     if minimum is not None:
-        required = max(required, int(minimum))
-    if review.passed and review.quality_score >= required:
+        threshold = max(threshold, int(minimum))
+    if review.passed and review.quality_score >= threshold:
         return ""
     kinds = ", ".join(str(issue.get("kind", "")) for issue in (review.issues or [])[:6]) or "below threshold"
+    if required or settings.editorial_gate or brand_gate:
+        raise AppError(
+            f"Editorial score {review.quality_score} is below {threshold} ({kinds}). "
+            "The video was not rendered."
+        )
     return (
-        f"Editorial score {review.quality_score} is below {required} ({kinds}). "
+        f"Editorial score {review.quality_score} is below {threshold} ({kinds}). "
         "The video was rendered for review and is not ready for publishing."
     )
+
+
+def _preview_review(session: Session, topic: Topic, draft: dict, audience: str) -> dict:
+    """Run the editorial review on a draft before it is saved, so a revision can be requested."""
+    existing = session.scalar(select(Script.id).where(Script.topic_id == topic.id))
+    hooks, claims, endings = priors(session, exclude_script_id=existing or "")
+    settings = get_settings()
+    return review_content(
+        title=draft["title"],
+        hook=draft["hook"],
+        narration=draft["narration"],
+        scenes=list(draft["beats"]),
+        claims=list(draft["claims"]),
+        cta="",
+        audience=audience,
+        prior_hooks=hooks,
+        prior_claims=claims,
+        prior_endings=endings,
+        threshold=settings.editorial_quality_minimum,
+    )
+
+
+def _write_script(session, job, brand, topic, opportunity, item, dossier, language: str) -> dict:
+    """Ask the model for a script, review it, and ask once more with the reviewer's issues.
+
+    Without an OpenAI key the labelled dossier fallback is used (needs_review).
+    With a key, a script that still fails after the revision stops the job:
+    stitched source sentences are not rendered in place of a rejected script.
+    """
+    settings = get_settings()
+    writer = _model_writer(session, job)
+    frame_language = brand.language if brand.language in _FRAMES_LANGS else language
+    if writer is None:
+        return narration_from_source(
+            title=opportunity.title,
+            extracted=dossier.extracted_text,
+            url=item.url,
+            language=frame_language,
+        )
+    audience = (brand.audience or "curious adults")[:160]
+    feedback = ""
+    attempts: list[dict] = []
+    for _attempt in range(max(int(settings.script_attempts), 1)):
+        try:
+            draft = narration_from_source(
+                title=opportunity.title,
+                extracted=dossier.extracted_text,
+                url=item.url,
+                language=frame_language,
+                complete=writer,
+                feedback=feedback,
+                allow_fallback=False,
+            )
+        except AppError as exc:
+            attempts.append({"passed": False, "issues": [exc.message]})
+            feedback = f"The previous draft was rejected: {exc.message}"
+            continue
+        review = _preview_review(session, topic, draft, audience)
+        details = [str(issue.get("detail") or issue.get("kind")) for issue in review["issues"]]
+        attempts.append({"passed": review["passed"], "score": review["quality_score"], "issues": details})
+        if review["passed"]:
+            draft["attempts"] = attempts
+            return draft
+        feedback = "The editorial reviewer rejected the previous draft:\n- " + "\n- ".join(details)
+        feedback += f"\nPrevious opening (do not reuse): {draft['hook']}"
+    last = attempts[-1]["issues"] if attempts else ["no draft"]
+    raise AppError(f"The model script failed review after {len(attempts)} drafts: " + "; ".join(last)[:400])
+
+
+def _spoken_durations(scenes: list[dict], audio) -> list[float] | None:
+    """Scene lengths from the voice's own sentence timings, so a cut lands where the sentence ends."""
+    alignment = (audio.metadata_json or {}).get("alignment") or {}
+    segments = alignment.get("segments") if isinstance(alignment, dict) else None
+    if not segments:
+        return None
+    from app.services.production.speech import speakable
+    from app.services.textutil import split_sentences
+
+    last_segment: list[int] = []
+    cursor = 0
+    for scene in scenes:
+        count = len(split_sentences(speakable(str(scene.get("narration") or "")))) or 1
+        cursor += count
+        if cursor > len(segments):
+            return None
+        last_segment.append(cursor - 1)
+    if cursor != len(segments):
+        return None
+    total = float(audio.duration_seconds)
+    durations = []
+    start = 0.0
+    for index, seg in enumerate(last_segment):
+        if index == len(last_segment) - 1:
+            boundary = total
+        else:
+            # Cut in the middle of the pause after the scene's last sentence.
+            boundary = (float(segments[seg]["end"]) + float(segments[seg + 1]["start"])) / 2
+        durations.append(max(boundary - start, 0.4))
+        start = boundary
+    return durations
 
 
 def _fetch_page(url: str) -> tuple[int, str]:
@@ -684,29 +799,51 @@ def _model_writer(session: Session, job: ProductionJob):
     if not settings.openai_enabled():
         return None
 
-    def complete(*, title: str, extracted: str, url: str, language: str) -> dict:
+    def complete(*, title: str, extracted: str, url: str, language: str, feedback: str = "") -> dict:
         brand = session.get(Brand, job.brand_id) if job.brand_id else None
         audience = brand.audience if brand is not None else ""
         niche = brand.niche if brand is not None else ""
+        recent_hooks, _claims, _endings = priors(session)
+        avoid = "\n".join(f"- {hook}" for hook in recent_hooks[-8:] if hook) or "- (none yet)"
+        actions = ", ".join(ACTIONS)
         system = (
-            "You write an original short-form narration for one vertical video. "
-            "Use the source only as evidence. Paraphrase. "
-            "Do not copy any source sentence of 10 or more words. "
-            "Do not invent statistics, quotations, studies, products, or numbers. "
-            "If the source is uncertain, keep the claim uncertain. "
-            "Open with a concrete hook in the first sentence. Keep one idea. "
-            "Use short spoken sentences, then a conclusion. "
-            "Add a call to action only when the source supports it. "
-            "Do not use phrases such as 'in today's world', 'let's dive in', or 'have you ever wondered'. "
-            "Match the requested language, audience, and niche. "
-            "Return JSON with title, hook, narration, beats (4 to 6 short sentences), "
-            "visual_queries (one specific footage search query per beat), "
-            "claims (paraphrases grounded in the source, each with text), description, and hashtags."
+            "You are the head writer of a faceless short-form explainer channel animated with one stickman. "
+            "Write one original vertical video (about 35 to 50 seconds spoken, 90 to 130 words). "
+            "The source page is your only evidence. Paraphrase it; "
+            "never copy a run of 10 or more source words. "
+            "Do not invent statistics, quotations, studies, names, products, or numbers. "
+            "When the source is tentative (correlation, a single study, a model, an early result), say so in "
+            "plain words: 'may', 'in one study', 'researchers think'. Never turn a correlation into a cause. "
+            "Keep the conditions a result depends on (sample size, 'with clear signals', 'in mice'). "
+            "No medical, financial, or legal advice "
+            "and no instructions to the viewer about their health.\n"
+            "Structure: beat 1 is the hook: a concrete, surprising, specific line "
+            "a viewer cannot scroll past "
+            "(a question, a contrast, or a vivid situation), never a generic opener. "
+            "Middle beats build one idea step by step with a clear 'why'. "
+            "The last beat lands a takeaway the viewer can reuse, in fresh words; no 'so next time', "
+            "no 'remember', no call to subscribe.\n"
+            "Banned phrases: in today's world, let's dive in, have you ever wondered, "
+            "buckle up, game changer, "
+            "delve, it's important to note, research shows, studies show, in this video.\n"
+            "Each beat is one or two short spoken sentences. Its action is what the stickman does on screen, "
+            f"chosen from: {actions}. Use at least four different actions. Its label is 1 to 3 words shown "
+            "large on screen (a keyword, not a sentence).\n"
+            'Return JSON: {"title": str (under 70 characters, curiosity without clickbait), '
+            '"beats": [{"text": str, "action": str, "label": str}] (5 to 7 beats), '
+            '"claims": [{"text": str, "certainty": "established" or "hedged"}] '
+            "(every factual statement the narration makes, paraphrased, "
+            "hedged when the source is tentative), "
+            '"description": str (2 sentences, no hashtags), "hashtags": [str] (3 to 5)}.'
         )
         user = (
             f"Language: {language}\nAudience: {audience}\nNiche: {niche}\n"
-            f"Title: {title}\nURL: {url}\n\nSource:\n{extracted[:6000]}"
+            f"Working title: {title}\nSource URL: {url}\n"
+            f"Openings already used on this channel (write something different):\n{avoid}\n"
         )
+        if feedback:
+            user += f"\nRevise. {feedback}\n"
+        user += f"\nSource:\n{extracted[:6000]}"
         provider = OpenAIProvider(session)
         cache_key = make_cache_key(
             {
@@ -741,8 +878,10 @@ def _model_writer(session: Session, job: ProductionJob):
 
 
 def _reserve_voice_budget(session, job, narration: str) -> None:
+    from app.services.voice import plan_engine
+
     settings = get_settings()
-    if not settings.elevenlabs_enabled():
+    if plan_engine(settings) != "elevenlabs":
         return
     estimate = Decimal(len(narration)) / Decimal(1000) * Decimal(str(settings.elevenlabs_cost_per_1k_chars))
     assert_production_budget(session, job, estimate)
@@ -915,7 +1054,7 @@ def _finish_without_substitute(
     fallbacks = []
     if draft.get("script_mode") != "original":
         fallbacks.append("script")
-    if audio.provider != "elevenlabs":
+    if audio.provider not in _PRODUCTION_VOICES:
         fallbacks.append("voice")
     fallbacks.append("footage")
     job.report = {

@@ -355,7 +355,7 @@ def _quiet_cycle(session, brand, **_kwargs):
     return run
 
 
-def test_editorial_gate_still_renders_for_review(db, monkeypatch):
+def test_editorial_gate_refuses_the_render(db, monkeypatch):
     _enable(db)
     brand = create_brand(
         db,
@@ -379,16 +379,11 @@ def test_editorial_gate_still_renders_for_review(db, monkeypatch):
         lambda *_args, **_kwargs: FakeReview(),
     )
     discover, page = _feeds("https://example.com/plates")
-    result = run_brand_production(db, brand, discover_fetch=discover, page_fetch=page)
-    assert result["status"] == "succeeded"
-    assert result["videos"] == 1
-    job = db.scalars(select(ProductionJob)).one()
-    assert job.status == "succeeded"
-    assert "Editorial" in " ".join((job.report or {}).get("warnings") or [])
-    assert (job.report or {}).get("quality_status") == "needs_review"
-    assert (job.report or {}).get("ready_for_publishing") is False
-    video = db.scalars(select(Video)).one()
-    assert video.path
+    run_brand_production(db, brand, discover_fetch=discover, page_fetch=page)
+    job = db.scalars(select(ProductionJob)).first()
+    assert job.status == "failed"
+    assert "Editorial score 12" in job.error
+    assert db.scalars(select(Video)).first() is None
 
 
 def test_one_opportunity_cannot_be_produced_twice_at_once(db, monkeypatch):

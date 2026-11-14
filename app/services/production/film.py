@@ -13,7 +13,13 @@ def _escape(path: Path) -> str:
     return text.replace("\\", r"\\").replace(":", r"\:").replace("'", r"\'")
 
 
-def write_subtitles(narration: str, duration: float, path: Path, alignment: dict | None = None) -> Path:
+def write_subtitles(
+    narration: str,
+    duration: float,
+    path: Path,
+    alignment: dict | None = None,
+    background: str = "dark",
+) -> Path:
     from app.services.subtitles import cues_from_alignment, render_ass
 
     cues = None
@@ -25,7 +31,7 @@ def write_subtitles(narration: str, duration: float, path: Path, alignment: dict
     if cues is None:
         cues = time_cues(narration, duration, max_chars=32)
     path.write_text(render_srt(cues), encoding="utf-8")
-    path.with_suffix(".ass").write_text(render_ass(cues), encoding="utf-8")
+    path.with_suffix(".ass").write_text(render_ass(cues, background), encoding="utf-8")
     return path
 
 

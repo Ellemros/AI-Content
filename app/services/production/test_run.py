@@ -54,12 +54,14 @@ def _require_live_providers(brand: Brand) -> None:
     settings = get_settings()
     if not settings.openai_enabled():
         raise AppError("OPENAI_API_KEY is empty. The test was not started and nothing was published.")
-    if plan_engine(settings) != "elevenlabs" or not settings.elevenlabs_enabled():
-        raise AppError(
-            "ElevenLabs is not the active voice. The test was not started and nothing was published."
-        )
     language = brand.language if brand.language in {"en", "cs"} else "en"
-    if not _brand_voice(brand, language):
+    engine = plan_engine(settings, language)
+    if engine not in {"kokoro", "elevenlabs", "voicestudio"}:
+        raise AppError(
+            f"The active voice is {engine}, which is not a production voice. "
+            "Run `python -m app.cli install-voice` for Kokoro. The test was not started."
+        )
+    if engine == "elevenlabs" and not _brand_voice(brand, language):
         raise AppError("No ElevenLabs voice id is set. The test was not started and nothing was published.")
 
 

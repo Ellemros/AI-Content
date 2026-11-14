@@ -14,3 +14,6 @@ data/**/*.srt
 data/**/*.log
 data/**/*.txt
 !data/**/.gitkeep
+data/models/
+data/production/
+data/**/*.ass

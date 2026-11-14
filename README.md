@@ -6,7 +6,7 @@ Phase 1 runs with no paid API key. OpenAI and ElevenLabs are optional.
 
 ## Setup
 
-Python 3.12+, FFmpeg, and espeak-ng. espeak-ng is the offline voice. Edge TTS is used when `TTS_PROVIDER=auto` and the machine can reach Microsoft's speech service.
+Python 3.12+ and FFmpeg. The production voice is Kokoro-82M, a local neural voice (Apache-2.0 weights, CPU only, about 350 MB). Download it once with `python -m app.cli install-voice`. espeak-ng is optional and only used by the older `render-short` path and the tests.
 
 ```bash
 python3.12 -m venv .venv
@@ -156,15 +156,17 @@ python -m app.cli test-production --slug everyday-decisions
 
 Run `run-cycle` first so the brand has opportunities. With `OPENAI_API_KEY` set, the script is an original narration checked against the source page. Invented numbers, copied sentences, and generic openers are rejected. With no key, or when that check fails, the script is an explicit fallback built from source sentences. That fallback is not an original AI script, and the video is `needs_review`.
 
-`TTS_PROVIDER=auto` uses ElevenLabs when `ELEVENLABS_API_KEY` is set. A brand can store its own voice id. `ELEVENLABS_DEFAULT_VOICE_ID` and `ELEVENLABS_MODEL_ID` override the language voices and the model. If ElevenLabs is the planned voice and the call fails, the job fails. It does not silently switch to espeak and mark the file ready. espeak-ng and Edge stay available for offline and `render-short` renders, and a production job that used them is `needs_review`.
+`TTS_PROVIDER=auto` uses Kokoro for English when the model is installed, then Edge, then espeak-ng. `auto` never picks a paid engine: ElevenLabs is used only with `TTS_PROVIDER=elevenlabs`. `KOKORO_VOICE` (default `af_heart`) and `KOKORO_SPEED` choose the voice. Kokoro speaks one sentence at a time, so every sentence has an exact start and end. Scene cuts land in the pause after a scene's last sentence, and a caption never runs across the end of a sentence. Edge and espeak-ng renders stay `needs_review`.
+
+The script is a storyboard: 5 to 7 beats, each with the stickman's action and a 1 to 3 word on-screen keyword, plus every factual claim labelled `established` or `hedged`. A draft is rejected when it copies the source, adds a number, or states flatly what the source only suggests ("appear to", "may", "linked"). The editorial review then runs on the draft. A rejected draft goes back to the model once with the reasons (`SCRIPT_ATTEMPTS`, default 2). If it still fails, the job fails and nothing is rendered; stitched source sentences are not rendered in place of a rejected model script. Earlier drafts of the same topic do not count as repetition. Only other videos do.
 
 `PRODUCTION_FOOTAGE=stickman` is the production picture. Each scene is an original stickman animation chosen from the narration: the same figure walks, compares, chooses, checks a clock, or notices a mark. Limb motion is drawn into the frames. A still card is not substituted, and a scene that does not move fails the job. The old licensed library stays on `/production` and is used only when `PRODUCTION_FOOTAGE=local`. `PRODUCTION_FOOTAGE=pexels` plus `PEXELS_API_KEY` remains optional. No vision model watches the finished frames. Stickman jobs record `directed-from-narration`; stock jobs stay `unverified`.
 
-Stickman Video Director was not wired in as a subprocess. Its Autopilot mode is an agent skill: the local renderer still expects authored scenes and a user-approved preview. Open Generative AI is an MIT studio in front of image and video models; the application being open source does not make Flux, Kling, Sora, or Veo free, and a local weight is not practical here without a large GPU. AppFlowy is an AGPL workspace and is not part of rendering. VoiceStudio can be selected with `TTS_PROVIDER=voicestudio` only after `VOICESTUDIO_COMMERCIAL_USE=yes`, because the application is AGPL-3.0 and the default OmniVoice weights are CC-BY-NC. `auto` does not select it, and a failed VoiceStudio or ElevenLabs call does not fall through to espeak.
+Stickman Video Director (MIT) was evaluated again on 2026-11-14 and is still not wired in. It is a set of agent instructions plus example Node renderers that an AI coding agent rewrites and reviews for every video; there is no command that turns a script into an MP4 unattended. Its B1 minimal line-art look is the reference for the built-in renderer, which now takes its action and keyword from the script. Open Generative AI is an MIT studio in front of image and video models; the application being open source does not make Flux, Kling, Sora, or Veo free, and a local weight is not practical here without a large GPU. AppFlowy is an AGPL workspace and is not part of rendering. VoiceStudio can be selected with `TTS_PROVIDER=voicestudio` only after `VOICESTUDIO_COMMERCIAL_USE=yes`, because the application is AGPL-3.0 and the default OmniVoice weights are CC-BY-NC. `auto` does not select it, and a failed VoiceStudio or ElevenLabs call does not fall through to espeak.
 
 The edit is a 1080×1920 film: footage is cropped to fill the frame, scenes crossfade, captions sit above the short-form UI, and the music bed is ducked under the narration. Subtitles come from the spoken text. Character timing is used only when ElevenLabs returns alignment.
 
-A file is `ready` only when the required technical checks pass, the script is original, the voice is ElevenLabs or a confirmed VoiceStudio voice, and the picture is either a full set of distinct licensed clips or moving stickman scenes. espeak, Edge, a fallback script, a still frame, or a missing clip keeps the file at `needs_review` or `failed`. `ready_for_publishing` is set only for `ready`. Nothing is published.
+A file is `ready` only when the required technical checks pass, the script is original, the voice is Kokoro, ElevenLabs, or a confirmed VoiceStudio voice, the editorial review passed, and the picture is either a full set of distinct licensed clips or moving stickman scenes. espeak, Edge, a fallback script, a still frame, or a missing clip keeps the file at `needs_review` or `failed`. `ready_for_publishing` is set only for `ready`. Nothing is published.
 
 `PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. The estimate is checked before the call. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
 
@@ -178,7 +180,10 @@ The Production page (`/production`) lists the script provider, voice, visual pro
 | `DATA_DIR` | Media and the SQLite file's sibling folders. |
 | `OPENAI_API_KEY` | Optional. Topics, scripts, localization, and metadata. |
 | `ELEVENLABS_API_KEY` | Optional. Preferred production voice. Also set a voice id. |
-| `TTS_PROVIDER` | `auto`, `espeak`, `edge`, `elevenlabs`, or `voicestudio`. `auto` picks ElevenLabs, then Edge, then espeak-ng. |
+| `TTS_PROVIDER` | `auto`, `kokoro`, `espeak`, `edge`, `elevenlabs`, or `voicestudio`. `auto` picks Kokoro (English), then Edge, then espeak-ng. It never picks ElevenLabs. |
+| `KOKORO_VOICE` | Kokoro voice. Default `af_heart`. Others include `am_michael`, `bf_emma`, `bm_george`. |
+| `KOKORO_SPEED` | Speaking rate. Default `1.0`. |
+| `SCRIPT_ATTEMPTS` | Model drafts per production job, the second with the reviewer's reasons. Default `2`. |
 | `MONTHLY_SPEND_CAP_USD` | Paid calls over this cap fail with a clear error. `0` blocks every paid call. |
 | `NEAR_DUPLICATE_THRESHOLD` | Jaccard cutoff for topic titles. Default `0.82`. |
 | `FONT_PATH` | Optional. Defaults to DejaVu Sans, then Arial. |
