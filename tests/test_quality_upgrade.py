@@ -69,6 +69,32 @@ def _original(**_kwargs) -> dict:
     }
 
 
+def test_string_claims_from_the_model_stay_an_original_script():
+    def complete(**_kwargs):
+        draft = _original()
+        draft["claims"] = [
+            "Cold plates carry heat away from the cells while the pack charges.",
+            "The current drops as the plates approach the temperature limit.",
+        ]
+        draft["beats"] = draft["narration"]
+        draft["visual_queries"] = "battery cold plate close up\ntemperature gauge on machinery"
+        draft["hashtags"] = "#battery #cooling"
+        return draft
+
+    parsed = narration_from_source(
+        title="Cold plates and battery cooling",
+        extracted=_source(),
+        url="https://example.com/plates",
+        language="en",
+        complete=complete,
+    )
+    assert parsed["script_mode"] == "original"
+    assert parsed["claims"][0]["text"].startswith("Cold plates carry heat")
+    assert parsed["visual_queries"][0].startswith("battery cold plate")
+    assert parsed["hashtags"] == ["#battery", "#cooling"]
+    assert len(parsed["beats"]) >= 4
+
+
 def test_original_script_is_kept_when_it_is_grounded():
     draft = narration_from_source(
         title="Cold plates and battery cooling",
