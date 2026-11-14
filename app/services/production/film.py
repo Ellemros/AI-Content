@@ -35,6 +35,9 @@ def write_subtitles(
     return path
 
 
+_XFADE = {"fade", "slideleft", "slideup", "circleopen", "wipeleft", "smoothright", "fadeblack", "radial"}
+
+
 def _visual_input(path: Path, kind: str, duration: float) -> list[str]:
     if kind in {"clip", "stickman"}:
         return ["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(path)]
@@ -65,7 +68,9 @@ def _visual_filter(index: int, kind: str, duration: float) -> str:
     return f"[{index}:v]{body}[v{index}]"
 
 
-def _join_visuals(count: int, play: list[float], overlap: float) -> list[str]:
+def _join_visuals(
+    count: int, play: list[float], overlap: float, transitions: list[str] | None = None
+) -> list[str]:
     if count == 1:
         return ["[v0]null[vcat]"]
     filters = []
@@ -74,8 +79,11 @@ def _join_visuals(count: int, play: list[float], overlap: float) -> list[str]:
         offset = shown - overlap
         source = "v0" if index == 1 else f"x{index - 1}"
         dest = "vcat" if index == count - 1 else f"x{index}"
+        kind = (transitions or [])[index] if transitions and index < len(transitions) else "fade"
+        if kind not in _XFADE:
+            kind = "fade"
         filters.append(
-            f"[{source}][v{index}]xfade=transition=fade:duration={overlap:.3f}:offset={offset:.3f}[{dest}]"
+            f"[{source}][v{index}]xfade=transition={kind}:duration={overlap:.3f}:offset={offset:.3f}[{dest}]"
         )
         shown = shown + play[index] - overlap
     return filters
@@ -91,6 +99,7 @@ def render_film(
     output: Path,
     kinds: list[str] | None = None,
     sfx: Path | None = None,
+    transitions: list[str] | None = None,
 ) -> None:
     if len(images) != len(durations) or not images:
         raise ValueError("Each scene image needs a duration.")
@@ -100,7 +109,7 @@ def render_film(
     _font_path, family = find_font(False)
     fonts_dir = _font_path.parent
     count = len(images)
-    overlap = 0.12 if count > 1 else 0.0
+    overlap = (0.28 if transitions else 0.12) if count > 1 else 0.0
     # A little extra on each input keeps the crossfade inside the clip. -t trims it back.
     play = [
         duration + (overlap if index < count - 1 else 0.0) + 0.05 for index, duration in enumerate(durations)
@@ -110,7 +119,7 @@ def render_film(
     for index, (image, duration, kind) in enumerate(zip(images, play, scene_kinds, strict=True)):
         args.extend(_visual_input(image, kind, duration))
         filters.append(_visual_filter(index, kind, duration))
-    filters.extend(_join_visuals(count, play, overlap))
+    filters.extend(_join_visuals(count, play, overlap, transitions))
     captions = srt.with_suffix(".ass")
     if captions.is_file():
         filters.append(f"[vcat]subtitles='{_escape(captions)}':fontsdir='{_escape(fonts_dir)}'[vout]")

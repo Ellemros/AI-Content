@@ -8,7 +8,11 @@ from app.services.research.scoring import classify_horizon
 from app.services.textutil import tokens
 
 _MEDICAL = re.compile(
-    r"\b(treatment|diagnosis|diagnosed|symptom|disease|alzheimer|cancer|medication|therapy)\b",
+    # Conservative on purpose: a false hold costs one topic, a missed one risks medical advice.
+    r"\b(treatments?|diagnosis|diagnosed|symptoms?|diseases?|alzheimer\S*|cancers?|medications?|"
+    r"therap(?:y|ies)|depression|anxiety|dementia|stroke|addiction|obesity|vaccines?|drugs?|disorders?|"
+    r"cures?|clinical|patients?|pain|diets?|supplements?|diabetes|surgery|mental health|ptsd|parkinson\S*|"
+    r"tumou?rs?|infections?|virus|blood pressure|cholesterol|overdose|suicide|cannabis|marijuana)\b",
     re.IGNORECASE,
 )
 _FINANCIAL = re.compile(

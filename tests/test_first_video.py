@@ -157,7 +157,7 @@ def test_the_writer_gets_the_rejection_and_revises(db, monkeypatch):
         "_preview_review",
         lambda *_args: {"passed": True, "issues": [], "quality_score": 100},
     )
-    brand = SimpleNamespace(language="en", audience="adults")
+    brand = SimpleNamespace(language="en", audience="adults", identity={}, id="brand-test")
     opportunity = SimpleNamespace(title=TITLE)
     item = SimpleNamespace(url="https://x.test/crows")
     dossier = SimpleNamespace(extracted_text=SOURCE)
@@ -186,7 +186,7 @@ def test_a_script_that_never_passes_stops_the_job(db, monkeypatch):
         production_pipeline._write_script(
             db,
             None,
-            SimpleNamespace(language="en", audience="adults"),
+            SimpleNamespace(language="en", audience="adults", identity={}, id="brand-test"),
             None,
             SimpleNamespace(title=TITLE),
             SimpleNamespace(url="https://x.test/crows"),

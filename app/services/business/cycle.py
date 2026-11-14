@@ -3,7 +3,7 @@
 import logging
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -106,6 +106,16 @@ def _score_items(
                 ContentOpportunity.discovered_item_id == item.id,
             )
         )
+        if existing is None:
+            # One story often arrives through two feeds. Keep one opportunity per title.
+            same_title = session.scalar(
+                select(ContentOpportunity.id).where(
+                    ContentOpportunity.brand_id == brand.id,
+                    func.lower(ContentOpportunity.title) == item.title[:300].lower(),
+                )
+            )
+            if same_title is not None:
+                continue
         signals = build_signals(
             title=item.title,
             summary=item.summary or "",
@@ -129,6 +139,9 @@ def _score_items(
         row.signals = [{"factor": key, **value} for key, value in signals.items()]
         if sample is not None:
             row.youtube_sample = sample
+        if existing is not None and existing.status == "held":
+            # A hold is never released by a re-score. Only a person releases it.
+            reason = existing.hold_reason or reason or "Held."
         row.status = "held" if reason else "evaluated"
         row.hold_reason = reason
         already_produced = existing is not None and existing.production_status in _KEEP_PRODUCTION

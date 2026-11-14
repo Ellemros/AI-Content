@@ -49,9 +49,14 @@ from app.services.production.footage import (
     recent_clip_ids,
     write_missing_slate,
 )
-from app.services.production.scripting import ACTIONS, narration_from_source, plan_scenes
+from app.services.production.scripting import narration_from_source, plan_scenes
 from app.services.production.speech import speakable
-from app.services.production.stickman import render_stickman_scenes, stickman_enabled, write_scene_sfx
+from app.services.production.stickman import (
+    render_stickman_scenes,
+    stickman_enabled,
+    visual_variety,
+    write_engine_sfx,
+)
 from app.services.research.editorial import priors, review_content, review_script
 from app.services.textutil import jaccard
 from app.services.topics import create_topic
@@ -335,6 +340,16 @@ def _run(
     if opportunity.status == "held" or (opportunity.hold_reason or "").strip():
         job.stage = "select"
         raise AppError(opportunity.hold_reason or "This opportunity is held.")
+    from app.services.business.signals import hold_reason
+
+    late_hold = hold_reason(opportunity.title, "", brand)
+    if late_hold:
+        # The guardrail may be stricter than when this opportunity was scored. Hold it now; never release it.
+        opportunity.status = "held"
+        opportunity.hold_reason = late_hold
+        opportunity.production_status = "blocked"
+        job.stage = "select"
+        raise AppError(late_hold)
     item = None
     if opportunity.discovered_item_id:
         item = session.get(DiscoveredItem, opportunity.discovered_item_id)
@@ -381,8 +396,15 @@ def _run(
     durations = _spoken_durations(scenes, audio) or durations_for(scenes, audio.duration_seconds)
     sfx = None
     if stickman_enabled():
-        images, asset_ids, kinds, clip_ids = render_stickman_scenes(scenes, durations, work)
-        sfx = write_scene_sfx(work / "sfx.wav", durations)
+        identity = brand.identity if isinstance(brand.identity, dict) else {}
+        images, asset_ids, kinds, clip_ids = render_stickman_scenes(
+            scenes,
+            durations,
+            work,
+            style=str(identity.get("visual_style") or "paper"),
+            seed=int(hashlib.sha256(job.id.encode()).hexdigest()[:6], 16),
+        )
+        sfx = write_engine_sfx(work / "sfx.wav", durations, scenes)
         add_cost(session, job, provider="stickman", operation="animation", cost=0)
     else:
         images, asset_ids, kinds, clip_ids = _visuals(
@@ -409,7 +431,7 @@ def _run(
         audio.duration_seconds,
         srt_path,
         alignment=alignment,
-        background="light" if all(kind == "stickman" for kind in kinds) else "dark",
+        background=_caption_background(brand, kinds),
     )
     music = build_music(
         session,
@@ -427,6 +449,7 @@ def _run(
         output=output,
         kinds=kinds,
         sfx=sfx,
+        transitions=[str(scene.get("transition") or "fade") for scene in scenes] if sfx is not None else None,
     )
     summary = media_summary(output)
     video = Video(
@@ -500,6 +523,7 @@ def _run(
         "providers": providers,
         "rejected_model": draft.get("rejected_model") or "",
         "script_attempts": draft.get("attempts") or [],
+        "format": draft.get("format") or {},
         "scenes": scenes,
         "metadata": metadata,
         "quality": report,
@@ -517,6 +541,7 @@ def _run(
         "quality_status": quality_status,
         "warnings": warnings,
         "semantic_visual": report.get("semantic_visual") or "unverified",
+        "visual_variety": visual_variety(scenes) if sfx is not None else {},
     }
     if test_run:
         job.report = {**job.report, "test_run": True, "published": False, "ready_for_publishing": False}
@@ -553,6 +578,16 @@ def _run(
 
 
 _FRAMES_LANGS = {"en", "cs"}
+
+
+def _caption_background(brand: Brand, kinds: list[str]) -> str:
+    """Dark ink captions on light paper; white captions on footage and dark styles."""
+    if not kinds or not all(kind == "stickman" for kind in kinds):
+        return "dark"
+    from app.services.production.scene_engine import is_dark
+
+    identity = brand.identity if isinstance(brand.identity, dict) else {}
+    return "dark" if is_dark(str(identity.get("visual_style") or "paper")) else "light"
 
 
 _PRODUCTION_VOICES = {"kokoro", "elevenlabs", "voicestudio"}
@@ -614,8 +649,11 @@ def _write_script(session, job, brand, topic, opportunity, item, dossier, langua
     With a key, a script that still fails after the revision stops the job:
     stitched source sentences are not rendered in place of a rejected script.
     """
+    from app.services.strategy import choose_format
+
     settings = get_settings()
-    writer = _model_writer(session, job)
+    plan = choose_format(session, brand)
+    writer = _model_writer(session, job, plan["structure"], plan["target_seconds"])
     frame_language = brand.language if brand.language in _FRAMES_LANGS else language
     if writer is None:
         return narration_from_source(
@@ -647,6 +685,7 @@ def _write_script(session, job, brand, topic, opportunity, item, dossier, langua
         attempts.append({"passed": review["passed"], "score": review["quality_score"], "issues": details})
         if review["passed"]:
             draft["attempts"] = attempts
+            draft["format"] = plan
             return draft
         feedback = "The editorial reviewer rejected the previous draft:\n- " + "\n- ".join(details)
         feedback += f"\nPrevious opening (do not reuse): {draft['hook']}"
@@ -794,10 +833,15 @@ def _script(session, topic, language: str, draft: dict, scenes: list[dict]) -> t
     return script, version
 
 
-def _model_writer(session: Session, job: ProductionJob):
+def _model_writer(
+    session: Session, job: ProductionJob, structure: str = "explainer", target_seconds: int = 40
+):
     settings = get_settings()
     if not settings.openai_enabled():
         return None
+
+    beats_low = max(4, round(target_seconds / 8))
+    beats_high = max(beats_low + 2, round(target_seconds / 5))
 
     def complete(*, title: str, extracted: str, url: str, language: str, feedback: str = "") -> dict:
         brand = session.get(Brand, job.brand_id) if job.brand_id else None
@@ -805,10 +849,15 @@ def _model_writer(session: Session, job: ProductionJob):
         niche = brand.niche if brand is not None else ""
         recent_hooks, _claims, _endings = priors(session)
         avoid = "\n".join(f"- {hook}" for hook in recent_hooks[-8:] if hook) or "- (none yet)"
-        actions = ", ".join(ACTIONS)
+        from app.services.production import scene_engine
+        from app.services.strategy import structure_brief
+
+        brief = structure_brief(structure)
         system = (
-            "You are the head writer of a faceless short-form explainer channel animated with one stickman. "
-            "Write one original vertical video (about 35 to 50 seconds spoken, 90 to 130 words). "
+            "You are the head writer and storyboard artist of a faceless short-form explainer channel "
+            "animated with stickman figures. Write one original vertical video "
+            f"(about {target_seconds} seconds spoken, "
+            f"{int(target_seconds * 2.5)} to {int(target_seconds * 2.9)} words). "
             "The source page is your only evidence. Paraphrase it; "
             "never copy a run of 10 or more source words. "
             "Do not invent statistics, quotations, studies, names, products, or numbers. "
@@ -816,21 +865,32 @@ def _model_writer(session: Session, job: ProductionJob):
             "plain words: 'may', 'in one study', 'researchers think'. Never turn a correlation into a cause. "
             "Keep the conditions a result depends on (sample size, 'with clear signals', 'in mice'). "
             "No medical, financial, or legal advice "
-            "and no instructions to the viewer about their health.\n"
-            "Structure: beat 1 is the hook: a concrete, surprising, specific line "
-            "a viewer cannot scroll past "
-            "(a question, a contrast, or a vivid situation), never a generic opener. "
-            "Middle beats build one idea step by step with a clear 'why'. "
-            "The last beat lands a takeaway the viewer can reuse, in fresh words; no 'so next time', "
-            "no 'remember', no call to subscribe.\n"
+            "and no instructions to the viewer about their health or money.\n"
+            f"Story structure for this video: {brief}\n"
+            "Beat 1 is the hook: concrete, surprising, specific, never a generic opener. "
+            "The last beat lands a takeaway in fresh words; no 'so next time', no 'remember', "
+            "no call to subscribe.\n"
             "Banned phrases: in today's world, let's dive in, have you ever wondered, "
             "buckle up, game changer, "
             "delve, it's important to note, research shows, studies show, in this video.\n"
-            "Each beat is one or two short spoken sentences. Its action is what the stickman does on screen, "
-            f"chosen from: {actions}. Use at least four different actions. Its label is 1 to 3 words shown "
-            "large on screen (a keyword, not a sentence).\n"
+            "Storyboard every beat so the picture shows the idea, not a caption of it. Fields per beat: "
+            f"layout ({', '.join(scene_engine.LAYOUTS)}): duo for two people or two sides, "
+            "crowd for 'most people', "
+            "chart only when the source gives two to four comparable numbers, "
+            "split for before/after or A vs B, "
+            "closeup for a feeling or a thought, metaphor for an abstract idea shown as an object; "
+            f"setting ({', '.join(scene_engine.SETTINGS)}); "
+            f"action ({', '.join(scene_engine.ACTIONS)}); "
+            f"props: zero to two from ({', '.join(scene_engine.PROPS)}), chosen as visual metaphors; "
+            f"camera ({', '.join(scene_engine.CAMERAS)}); "
+            "emphasis: optional 1 to 4 words or one number from the source shown big, at most three beats; "
+            "chart: only for layout chart, [{label, value}] with values copied from the source; "
+            "labels: only for layout split, [left, right]. "
+            "Use at least four layouts and four settings, and never the same layout twice in a row.\n"
             'Return JSON: {"title": str (under 70 characters, curiosity without clickbait), '
-            '"beats": [{"text": str, "action": str, "label": str}] (5 to 7 beats), '
+            '"beats": [{"text": str, "layout": str, "setting": str, "action": str, "props": [str], '
+            '"camera": str, "emphasis": str, "chart": [{"label": str, "value": number}], "labels": [str]}] '
+            f"({beats_low} to {beats_high} beats, each one or two short spoken sentences), "
             '"claims": [{"text": str, "certainty": "established" or "hedged"}] '
             "(every factual statement the narration makes, paraphrased, "
             "hedged when the source is tentative), "
