@@ -30,13 +30,19 @@ def write_subtitles(narration: str, duration: float, path: Path, alignment: dict
 
 
 def _visual_input(path: Path, kind: str, duration: float) -> list[str]:
-    if kind == "clip":
+    if kind in {"clip", "stickman"}:
         return ["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(path)]
     return ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(path)]
 
 
 def _visual_filter(index: int, kind: str, duration: float) -> str:
     progress = f"min(t/{max(duration, 0.2):.3f}\\,1)"
+    if kind == "stickman":
+        body = (
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920,fps=30,format=yuv420p,setsar=1"
+        )
+        return f"[{index}:v]{body}[v{index}]"
     if kind == "clip":
         body = (
             f"scale=1296:2304:force_original_aspect_ratio=increase,"
@@ -78,6 +84,7 @@ def render_film(
     srt: Path,
     output: Path,
     kinds: list[str] | None = None,
+    sfx: Path | None = None,
 ) -> None:
     if len(images) != len(durations) or not images:
         raise ValueError("Each scene image needs a duration.")
@@ -110,14 +117,18 @@ def render_film(
             f"[vcat]subtitles='{_escape(srt)}':fontsdir='{_escape(fonts_dir)}':force_style='{style}'[vout]"
         )
     args.extend(["-i", str(voice), "-i", str(music)])
+    if sfx is not None:
+        args.extend(["-i", str(sfx)])
     fade_out = max(sum(durations) - 0.15, 0)
     filters.append(f"[{count}:a]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,asplit=2[va][vb]")
     filters.append(f"[{count + 1}:a]aresample=48000,volume=0.12[mbed]")
     filters.append("[mbed][vb]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[ducked]")
-    filters.append(
-        "[va][ducked]amix=inputs=2:duration=first:normalize=0,"
-        f"afade=t=in:st=0:d=0.08,afade=t=out:st={fade_out:.3f}:d=0.12[aout]"
-    )
+    if sfx is not None:
+        filters.append(f"[{count + 2}:a]aresample=48000,volume=0.45[sfx]")
+        mix = "[va][ducked][sfx]amix=inputs=3:duration=first:normalize=0,"
+    else:
+        mix = "[va][ducked]amix=inputs=2:duration=first:normalize=0,"
+    filters.append(f"{mix}afade=t=in:st=0:d=0.08,afade=t=out:st={fade_out:.3f}:d=0.12[aout]")
     output.parent.mkdir(parents=True, exist_ok=True)
     if output.exists():
         output.unlink()

@@ -231,10 +231,10 @@
 
 <h2>Opportunity pipeline</h2>
 <p class="banner">Finished files stay on this machine. This page does not publish them. A video is ready only after the production checks pass.</p>
-<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Footage: {{ settings.production_footage or "local" }}.</p>
+<p>Per-video cap ${{ "%.2f"|format(settings.production_video_cap_usd) }}. Daily cap ${{ "%.2f"|format(settings.production_daily_cap_usd) }}. Visuals: {{ settings.production_footage or "stickman" }}.</p>
 
 <h2>Licensed footage</h2>
-<p>Upload a clip only when you can name the source and the license. Checking commercial use means that permission is already recorded. A local file is not a license by itself. Clips without that check stay in the library and are not used.</p>
+<p>Stickman animation is the production picture. This library is kept so older clips are not deleted. Upload a clip only when you can name the source and the license. Checking commercial use means that permission is already recorded. A local file is not a license by itself.</p>
 {% if stock_assets %}
 <table>
   <tr><th>Clip</th><th>Source</th><th>License</th><th>Tags</th><th>Eligible</th><th>Uses</th><th>Preview</th></tr>
@@ -300,7 +300,9 @@
     <li>
       {{ scene.index }}. {{ scene.visual }} · {{ scene.on_screen_text }}
       {% if scene.footage %}
-      {% if scene.footage.status == "matched" %}
+      {% if scene.footage.status == "animated" %}
+      · stickman {{ scene.footage.action }} · original animation
+      {% elif scene.footage.status == "matched" %}
       · {{ scene.footage.filename }} · {{ scene.footage.license }} · {{ scene.footage.source }}
       {% if scene.footage.creator %} · {{ scene.footage.creator }}{% endif %}
       {% else %}

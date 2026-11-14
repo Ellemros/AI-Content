@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 from app.cli import main
-from app.config import get_settings
 from app.core.errors import AppError
 from app.models import (
     BrandSource,
@@ -12,9 +11,11 @@ from app.models import (
     PublishedPost,
     PublishingJob,
     ResearchSource,
+    Video,
 )
 from app.services.automation import create_brand, videos_today
 from app.services.business.signals import hold_reason
+from app.services.probes import media_summary
 from app.services.production.pipeline import eligible_opportunities
 from app.services.production.test_run import TEST_TITLE, run_test_production, topic_hold
 from sqlalchemy import func, select
@@ -105,10 +106,8 @@ def test_test_run_does_not_publish_or_change_existing_opportunities(db):
     assert report["ready_for_publishing"] is False
     assert report["quality_status"] == "needs_review"
     assert report["test_run"] is True
-    assert report["video_path"] == ""
-    assert "No illustrated card was substituted." in report["explanation"]
-    assert report["missing_footage"]
-    assert job.video_id is None
+    assert report["visual_provider"] == "stickman"
+    assert job.video_id is not None
     db.refresh(held)
     assert (held.id, held.status, held.hold_reason) == before
     test_row = db.get(ContentOpportunity, job.opportunity_id)
@@ -120,9 +119,11 @@ def test_test_run_does_not_publish_or_change_existing_opportunities(db):
     assert db.scalar(select(func.count()).select_from(PublishingJob)) == 0
     assert db.scalar(select(func.count()).select_from(PublishedPost)) == 0
     assert (brand.identity or {}).get("blocked_areas") == blocked
-    data = Path(get_settings().data_dir)
-    assert list(data.rglob("*.png")) == []
-    assert list(data.rglob("*.mp4")) == []
+    video = db.get(Video, job.video_id)
+    path = Path(video.path)
+    assert path.is_file() and path.stat().st_size > 0
+    summary = media_summary(path)
+    assert (summary["width"], summary["height"]) == (1080, 1920)
     source = db.scalar(select(ResearchSource).where(ResearchSource.url.contains("production-test.invalid")))
     assert source is not None and source.enabled is False
     linked = db.scalar(select(BrandSource).where(BrandSource.source_id == source.id))

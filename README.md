@@ -148,7 +148,7 @@ python -m app.cli produce-next --brand everyday-decisions
 python -m app.cli produce-next --brand everyday-decisions --opportunity OPPORTUNITY_ID
 ```
 
-`test-production` is a separate one-shot. It does not read feeds, does not change the status or hold reason of existing opportunities, and does not upload. It sends one fixed everyday-decision article through the same production pipeline. OpenAI and ElevenLabs must already be set; otherwise the command stops before creating a row. If no eligible licensed clip matches, it writes no MP4 and no substitute card, and the result is `needs_review`.
+`test-production` is a separate one-shot. It does not read feeds, does not change the status or hold reason of existing opportunities, and does not upload. It sends one fixed everyday-decision article through the same production pipeline. OpenAI and ElevenLabs must already be set; otherwise the command stops before creating a row. With `PRODUCTION_FOOTAGE=stickman` the picture is an original animation, so the command does not wait for a licensed clip.
 
 ```bash
 python -m app.cli test-production --slug everyday-decisions
@@ -158,11 +158,13 @@ Run `run-cycle` first so the brand has opportunities. With `OPENAI_API_KEY` set,
 
 `TTS_PROVIDER=auto` uses ElevenLabs when `ELEVENLABS_API_KEY` is set. A brand can store its own voice id. `ELEVENLABS_DEFAULT_VOICE_ID` and `ELEVENLABS_MODEL_ID` override the language voices and the model. If ElevenLabs is the planned voice and the call fails, the job fails. It does not silently switch to espeak and mark the file ready. espeak-ng and Edge stay available for offline and `render-short` renders, and a production job that used them is `needs_review`.
 
-Scenes use clips from `data/assets/stock`. Register each file on `/production` with its source, license, and tags, and mark commercial use only when that permission was recorded. A file without that permission is stored and is not eligible. A scene with no tagged match stays empty. The job is `needs_review`, and the report does not claim that every scene has footage. The same clip is not used twice in one video. Local selection costs 0 and does not call a paid API. `PRODUCTION_FOOTAGE=pexels` plus `PEXELS_API_KEY` is optional and off by default. No vision model scores whether a clip matches the sentence. The report says semantic visuals are unverified.
+`PRODUCTION_FOOTAGE=stickman` is the production picture. Each scene is an original stickman animation chosen from the narration: the same figure walks, compares, chooses, checks a clock, or notices a mark. Limb motion is drawn into the frames. A still card is not substituted, and a scene that does not move fails the job. The old licensed library stays on `/production` and is used only when `PRODUCTION_FOOTAGE=local`. `PRODUCTION_FOOTAGE=pexels` plus `PEXELS_API_KEY` remains optional. No vision model watches the finished frames. Stickman jobs record `directed-from-narration`; stock jobs stay `unverified`.
+
+Stickman Video Director was not wired in as a subprocess. Its Autopilot mode is an agent skill: the local renderer still expects authored scenes and a user-approved preview. Open Generative AI is an MIT studio in front of image and video models; the application being open source does not make Flux, Kling, Sora, or Veo free, and a local weight is not practical here without a large GPU. AppFlowy is an AGPL workspace and is not part of rendering. VoiceStudio can be selected with `TTS_PROVIDER=voicestudio` only after `VOICESTUDIO_COMMERCIAL_USE=yes`, because the application is AGPL-3.0 and the default OmniVoice weights are CC-BY-NC. `auto` does not select it, and a failed VoiceStudio or ElevenLabs call does not fall through to espeak.
 
 The edit is a 1080×1920 film: footage is cropped to fill the frame, scenes crossfade, captions sit above the short-form UI, and the music bed is ducked under the narration. Subtitles come from the spoken text. Character timing is used only when ElevenLabs returns alignment.
 
-A file is `ready` only when the required technical checks pass, the script is original, the voice is ElevenLabs, and every scene uses a distinct eligible licensed clip. `needs_review` means the file plays but a script, voice, or footage gap remains. `failed` means the file is unusable. `ready_for_publishing` is set only for `ready`. Nothing is published.
+A file is `ready` only when the required technical checks pass, the script is original, the voice is ElevenLabs or a confirmed VoiceStudio voice, and the picture is either a full set of distinct licensed clips or moving stickman scenes. espeak, Edge, a fallback script, a still frame, or a missing clip keeps the file at `needs_review` or `failed`. `ready_for_publishing` is set only for `ready`. Nothing is published.
 
 `PRODUCTION_VIDEO_CAP_USD` (default 1) and `PRODUCTION_DAILY_CAP_USD` (default 5) block a paid call that would pass the limit. The estimate is checked before the call. Local steps cost 0. `render-short` is unchanged and still uses the older card renderer. This command does not.
 
@@ -176,7 +178,7 @@ The Production page (`/production`) lists the script provider, voice, visual pro
 | `DATA_DIR` | Media and the SQLite file's sibling folders. |
 | `OPENAI_API_KEY` | Optional. Topics, scripts, localization, and metadata. |
 | `ELEVENLABS_API_KEY` | Optional. Preferred production voice. Also set a voice id. |
-| `TTS_PROVIDER` | `auto`, `espeak`, `edge`, or `elevenlabs`. `auto` picks ElevenLabs, then Edge, then espeak-ng. |
+| `TTS_PROVIDER` | `auto`, `espeak`, `edge`, `elevenlabs`, or `voicestudio`. `auto` picks ElevenLabs, then Edge, then espeak-ng. |
 | `MONTHLY_SPEND_CAP_USD` | Paid calls over this cap fail with a clear error. `0` blocks every paid call. |
 | `NEAR_DUPLICATE_THRESHOLD` | Jaccard cutoff for topic titles. Default `0.82`. |
 | `FONT_PATH` | Optional. Defaults to DejaVu Sans, then Arial. |
@@ -187,7 +189,7 @@ The Production page (`/production`) lists the script provider, voice, visual pro
 | `PRODUCTION_VIDEO_CAP_USD` | Paid-call ceiling for one production job. Default `1`. `0` blocks paid calls. |
 | `PRODUCTION_DAILY_CAP_USD` | Paid-call ceiling for the UTC day. Default `5`. |
 | `PRODUCTION_STOCK` | `none` or `wikimedia`. Default `none`. |
-| `PRODUCTION_FOOTAGE` | `local` or `pexels`. Default `local`. Pexels runs only when this is `pexels` and a key is set. |
+| `PRODUCTION_FOOTAGE` | `stickman`, `local`, or `pexels`. Default `stickman`. |
 | `PEXELS_API_KEY` | Optional. Unused unless `PRODUCTION_FOOTAGE=pexels`. |
 | `ELEVENLABS_MODEL_ID` | Optional model override. Empty uses `ELEVENLABS_MODEL`. |
 | `ELEVENLABS_DEFAULT_VOICE_ID` | Optional voice used when the brand has no voice id. |

@@ -51,6 +51,7 @@ from app.services.production.footage import (
 )
 from app.services.production.scripting import narration_from_source, plan_scenes
 from app.services.production.speech import speakable
+from app.services.production.stickman import render_stickman_scenes, stickman_enabled, write_scene_sfx
 from app.services.research.editorial import review_script
 from app.services.textutil import jaccard
 from app.services.topics import create_topic
@@ -380,24 +381,30 @@ def _run(
     work = get_settings().data_dir / "production" / job.id
     work.mkdir(parents=True, exist_ok=True)
     job.stage = "visuals"
-    images, asset_ids, kinds, clip_ids = _visuals(
-        session, job, scenes, work, allow_placeholder=allow_placeholder
-    )
-    if not allow_placeholder and any(kind != "clip" for kind in kinds):
-        _finish_without_substitute(
-            job,
-            opportunity,
-            scenes,
-            kinds,
-            clip_ids,
-            draft,
-            audio,
-            dossier,
-            test_run=test_run,
-        )
-        return
-    job.stage = "render"
     durations = durations_for(scenes, audio.duration_seconds)
+    sfx = None
+    if stickman_enabled():
+        images, asset_ids, kinds, clip_ids = render_stickman_scenes(scenes, durations, work)
+        sfx = write_scene_sfx(work / "sfx.wav", durations)
+        add_cost(session, job, provider="stickman", operation="animation", cost=0)
+    else:
+        images, asset_ids, kinds, clip_ids = _visuals(
+            session, job, scenes, work, allow_placeholder=allow_placeholder
+        )
+        if not allow_placeholder and any(kind != "clip" for kind in kinds):
+            _finish_without_substitute(
+                job,
+                opportunity,
+                scenes,
+                kinds,
+                clip_ids,
+                draft,
+                audio,
+                dossier,
+                test_run=test_run,
+            )
+            return
+    job.stage = "render"
     srt_path = work / "captions.srt"
     alignment = (audio.metadata_json or {}).get("alignment")
     write_subtitles(speakable(version.narration), audio.duration_seconds, srt_path, alignment=alignment)
@@ -416,6 +423,7 @@ def _run(
         srt=srt_path,
         output=output,
         kinds=kinds,
+        sfx=sfx,
     )
     summary = media_summary(output)
     video = Video(
@@ -467,7 +475,7 @@ def _run(
         fallbacks.append("script")
     if audio.provider != "elevenlabs":
         fallbacks.append("voice")
-    if any(kind != "clip" for kind in kinds):
+    if any(kind not in {"clip", "stickman"} for kind in kinds):
         fallbacks.append("footage")
     metadata = {
         "title": version.title,
@@ -747,7 +755,10 @@ def _brand_voice(brand: Brand, language: str) -> str:
     identity = brand.identity if isinstance(brand.identity, dict) else {}
     chosen = str(identity.get("voice_id") or "").strip()
     settings = get_settings()
-    if plan_engine(settings) != "elevenlabs":
+    planned = plan_engine(settings)
+    if planned == "voicestudio":
+        return chosen or settings.voicestudio_voice_id.strip()
+    if planned != "elevenlabs":
         return ""
     if chosen:
         return chosen
@@ -761,6 +772,8 @@ def _visual_provider(kinds: list[str], scenes: list[dict]) -> str:
         if (scene.get("footage") or {}).get("status") == "matched"
     }
     sources.discard("")
+    if kinds and all(kind == "stickman" for kind in kinds):
+        return "stickman"
     if kinds and all(kind == "clip" for kind in kinds):
         if sources == {"local-stock"}:
             return "local-stock"
