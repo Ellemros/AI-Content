@@ -364,7 +364,7 @@ def _run(
     topic = _topic(session, brand, opportunity, item, language)
     script, version = _script(session, topic, language, draft, scenes)
     job.script_id = script.id
-    _apply_editorial_gate(session, brand, script)
+    editorial_warning = _apply_editorial_gate(session, brand, script)
     job.stage = "narration"
     _reserve_voice_budget(session, job, draft["narration"])
     voice_id = _brand_voice(brand, language)
@@ -467,7 +467,6 @@ def _run(
         visual_kinds=kinds,
         clip_ids=clip_ids,
     )
-    video.quality_report = report
     visual_provider = _visual_provider(kinds, scenes)
     providers = [draft["provider"], audio.provider, visual_provider, "ffmpeg"]
     fallbacks = []
@@ -486,6 +485,14 @@ def _run(
         "ready_for_publishing": False,
     }
     quality_status = report["status"]
+    warnings = _voice_warnings(audio, report.get("warnings") or [])
+    if editorial_warning:
+        if editorial_warning not in warnings:
+            warnings.insert(0, editorial_warning)
+        if quality_status == "ready":
+            quality_status = "needs_review"
+        report = {**report, "status": quality_status, "warnings": warnings}
+    video.quality_report = report
     job.report = {
         "providers": providers,
         "rejected_model": draft.get("rejected_model") or "",
@@ -504,7 +511,7 @@ def _run(
         "clips": [scene.get("footage") for scene in scenes if isinstance(scene.get("footage"), dict)],
         "fallbacks": fallbacks,
         "quality_status": quality_status,
-        "warnings": _voice_warnings(audio, report.get("warnings") or []),
+        "warnings": warnings,
         "semantic_visual": report.get("semantic_visual") or "unverified",
     }
     if test_run:
@@ -544,23 +551,24 @@ def _run(
 _FRAMES_LANGS = {"en", "cs"}
 
 
-def _apply_editorial_gate(session: Session, brand: Brand, script: Script) -> None:
-    """Honor the global editorial gate and any stricter rule stored on the brand."""
+def _apply_editorial_gate(session: Session, brand: Brand, script: Script) -> str:
+    """Record a low editorial score. The film is still rendered and kept out of ready."""
     settings = get_settings()
     editorial = brand.editorial if isinstance(brand.editorial, dict) else {}
     brand_gate = bool(editorial.get("gate"))
     minimum = editorial.get("minimum")
     if not settings.editorial_gate and not brand_gate and minimum is None:
-        return
+        return ""
     review = review_script(session, script)
     required = review.threshold
     if minimum is not None:
         required = max(required, int(minimum))
     if review.passed and review.quality_score >= required:
-        return
+        return ""
     kinds = ", ".join(str(issue.get("kind", "")) for issue in (review.issues or [])[:6]) or "below threshold"
-    raise AppError(
-        f"Editorial score {review.quality_score} is below {required} ({kinds}). The video was not rendered."
+    return (
+        f"Editorial score {review.quality_score} is below {required} ({kinds}). "
+        "The video was rendered for review and is not ready for publishing."
     )
 
 
