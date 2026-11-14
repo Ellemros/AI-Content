@@ -12,6 +12,21 @@ from app.core.retry import RetryableError, call_with_retry
 from app.providers.cache import get_cached, make_cache_key, store_cached
 from app.services.cost import assert_within_cap, record_usage
 
+# USD per million tokens (input, output). Third-party listings checked 2026-11-14; OpenAI's page is
+# authoritative. Used for the pre-call budget estimate and for recorded cost.
+MODEL_PRICES = {
+    "gpt-5.5": (5.00, 30.00),
+    "gpt-5.4": (2.50, 15.00),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4o-mini": (0.15, 0.60),
+}
+
+
+def is_reasoning(model: str) -> bool:
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
 
 def _strip_fences(text: str) -> str:
     cleaned = text.strip()
@@ -23,12 +38,22 @@ def _strip_fences(text: str) -> str:
 
 
 class OpenAIProvider:
-    def __init__(self, session: Session, settings: Settings | None = None) -> None:
+    def __init__(self, session: Session, settings: Settings | None = None, model: str = "") -> None:
         self.session = session
         self.settings = settings or get_settings()
+        self.model = model or self.settings.openai_model
 
     def available(self) -> bool:
         return self.settings.openai_enabled()
+
+    def prices(self) -> tuple[Decimal, Decimal]:
+        known = MODEL_PRICES.get(self.model)
+        if known is not None:
+            return Decimal(str(known[0])), Decimal(str(known[1]))
+        return (
+            Decimal(str(self.settings.openai_input_cost_per_million)),
+            Decimal(str(self.settings.openai_output_cost_per_million)),
+        )
 
     def complete_json(self, *, operation: str, system: str, user: str) -> dict:
         if not self.available():
@@ -36,7 +61,7 @@ class OpenAIProvider:
         key = make_cache_key(
             {
                 "provider": "openai",
-                "model": self.settings.openai_model,
+                "model": self.model,
                 "operation": operation,
                 "system": system,
                 "user": user,
@@ -48,7 +73,7 @@ class OpenAIProvider:
                 self.session,
                 provider="openai",
                 operation=operation,
-                model=self.settings.openai_model,
+                model=self.model,
                 cached=True,
                 cost=0,
             )
@@ -62,7 +87,7 @@ class OpenAIProvider:
                 self.session,
                 provider="openai",
                 operation=operation,
-                model=self.settings.openai_model,
+                model=self.model,
                 input_tokens=usage["input"],
                 output_tokens=usage["output"],
                 cost=usage["cost"],
@@ -94,30 +119,35 @@ class OpenAIProvider:
 
     def _estimate(self, system: str, user: str) -> Decimal:
         input_tokens = Decimal(len(system) + len(user)) / Decimal(4)
-        output_tokens = Decimal(self.settings.openai_max_output_tokens)
+        # Reasoning models spend hidden tokens; budget for a long answer.
+        output_tokens = Decimal(12000 if is_reasoning(self.model) else self.settings.openai_max_output_tokens)
         million = Decimal(1_000_000)
-        cost = input_tokens / million * Decimal(str(self.settings.openai_input_cost_per_million))
-        cost += output_tokens / million * Decimal(str(self.settings.openai_output_cost_per_million))
-        return cost
+        price_in, price_out = self.prices()
+        return input_tokens / million * price_in + output_tokens / million * price_out
 
     def _post(self, system: str, user: str) -> tuple[str, dict]:
         url = self.settings.openai_base_url.rstrip("/") + "/chat/completions"
+        model = self.model
         body = {
-            "model": self.settings.openai_model,
-            "temperature": 0.4,
-            "max_tokens": self.settings.openai_max_output_tokens,
+            "model": model,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
+        if is_reasoning(model):
+            body["max_completion_tokens"] = 16000
+            body["reasoning_effort"] = "medium"
+        else:
+            body["temperature"] = 0.4
+            body["max_tokens"] = self.settings.openai_max_output_tokens
         headers = {
             "Authorization": f"Bearer {self.settings.openai_api_key}",
             "Content-Type": "application/json",
         }
         try:
-            response = httpx.post(url, headers=headers, json=body, timeout=60)
+            response = httpx.post(url, headers=headers, json=body, timeout=240 if is_reasoning(model) else 60)
         except httpx.HTTPError as exc:
             raise RetryableError(str(exc)) from exc
         if response.status_code == 429 or response.status_code >= 500:
@@ -132,6 +162,6 @@ class OpenAIProvider:
         if input_tokens == 0:
             input_tokens = int((len(system) + len(user)) / 4)
         million = Decimal(1_000_000)
-        cost = Decimal(input_tokens) / million * Decimal(str(self.settings.openai_input_cost_per_million))
-        cost += Decimal(output_tokens) / million * Decimal(str(self.settings.openai_output_cost_per_million))
+        price_in, price_out = self.prices()
+        cost = Decimal(input_tokens) / million * price_in + Decimal(output_tokens) / million * price_out
         return content, {"input": input_tokens, "output": output_tokens, "cost": cost}

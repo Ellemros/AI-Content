@@ -24,6 +24,17 @@ python -m app.cli run-cycle --slug money-minds
 python -m app.cli produce-next --brand money-minds
 ```
 
+Money Minds renders with the motion-graphics renderer in `renderer/` (Remotion, React). It needs Node.js 20+ once:
+
+```
+cd renderer
+npm install
+cd ..
+python -m app.cli set-renderer --brand money-minds --renderer motion
+```
+
+Topics can also be added as a viewer question with chosen sources (`add-topic --brand money-minds --question "..." --url URL --url URL`). A motion video stays `needs_review` until a person has watched it; `rerender --job JOB_ID` redraws the picture from the stored script and narration at no model cost. The design and its reasoning are in [docs/visual-direction.md](docs/visual-direction.md).
+
 The last command prints the MP4 path. `uvicorn app.main:app` serves the dashboard at http://127.0.0.1:8000/production .
 
 ## Publishing (off by default)

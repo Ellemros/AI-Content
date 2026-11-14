@@ -92,6 +92,10 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "production_jobs": {
         "attempts": "INTEGER NOT NULL DEFAULT 1",
     },
+    "content_opportunities": {
+        "question": "TEXT NOT NULL DEFAULT ''",
+        "source_urls": "JSON NOT NULL DEFAULT '[]'",
+    },
     "production_costs": {
         "brand_id": "VARCHAR(36)",
         "opportunity_id": "VARCHAR(36)",
