@@ -137,18 +137,8 @@ def _tags(value) -> list[str]:
     return []
 
 
-ACTIONS = (
-    "walk",
-    "compare",
-    "choose",
-    "clock",
-    "notice",
-    "think",
-    "point",
-    "surprise",
-    "explain",
-    "celebrate",
-)
+from app.services.production.scene_engine import ACTIONS  # noqa: E402,F401
+
 _HEDGES = (
     "might",
     "could",
@@ -189,18 +179,55 @@ def _source_match(sentence: str, source_sentences: list[str]) -> str:
     return ""
 
 
+# Lab models whose results must not be presented as findings about people.
+_STUDY_MODELS = {
+    "mice": r"\b(mice|mouse|murine)\b",
+    "rats": r"\b(rats?|rodents?)\b",
+    "fruit flies": r"\b(fruit flies|drosophila)\b",
+    "zebrafish": r"\bzebrafish\b",
+    "worms": r"\b(c\. elegans|nematodes?)\b",
+    "cells in a lab dish": r"\b(in vitro|cell cultures?|petri dish|organoids?)\b",
+    "computer simulations": r"\b(simulations?|computer models?)\b",
+}
+
+
+def dropped_study_model(narration: str, extracted: str) -> str:
+    """The lab model the source used, when the narration hides it. '' when it is said or absent."""
+    source = extracted.casefold()
+    spoken = narration.casefold()
+    for name, pattern in _STUDY_MODELS.items():
+        if len(re.findall(pattern, source)) >= 2 and not re.search(pattern, spoken):
+            if name == "rats" and re.search(_STUDY_MODELS["mice"], spoken):
+                continue
+            if name == "mice" and re.search(_STUDY_MODELS["rats"] + r"|\banimals?\b", spoken):
+                continue
+            return name
+    return ""
+
+
 def dropped_hedges(texts: list[str], extracted: str) -> list[str]:
     """Script sentences that state flatly what the matching source sentence hedges."""
     source_sentences = split_sentences(extracted)
+    # The hedged proposition is what follows the hedge word ("ink could help read the scrolls").
+    # A script sentence restating a different clause of that source sentence is not a dropped hedge.
+    clauses = [_hedged_clause(sentence) for sentence in source_sentences if hedged(sentence)]
+    clauses = [clause for clause in clauses if clause]
     found = []
     for text in texts:
         for sentence in split_sentences(text) or [text]:
             if hedged(sentence):
                 continue
-            match = _source_match(sentence, source_sentences)
-            if match and hedged(match):
+            if _source_match(sentence, clauses):
                 found.append(sentence)
     return found
+
+
+def _hedged_clause(sentence: str) -> str:
+    words = sentence.split()
+    for index, word in enumerate(words):
+        if re.sub(r"\W", "", word.casefold()) in _HEDGES:
+            return " ".join(words[index + 1 :])
+    return ""
 
 
 def _beat_items(value) -> list[dict]:
@@ -223,9 +250,31 @@ def _beat_items(value) -> list[dict]:
                         "text": text,
                         "action": str(item.get("action") or "").strip().lower(),
                         "label": str(item.get("label") or item.get("on_screen_text") or "").strip(),
+                        "direction": {
+                            key: item.get(key)
+                            for key in ("layout", "setting", "props", "camera", "emphasis", "chart", "labels")
+                            if item.get(key) not in (None, "", [])
+                        },
                     }
                 )
     return items
+
+
+def _checked_direction(direction: dict, extracted: str, title: str) -> dict:
+    """Drop any chart or emphasis whose number is not on the source page."""
+    allowed = _numbers(extracted) | _numbers(title)
+    clean = dict(direction)
+    emphasis = str(clean.get("emphasis") or "")
+    if _numbers(emphasis) - allowed:
+        clean.pop("emphasis", None)
+    chart = clean.get("chart")
+    if chart is not None:
+        rows = chart if isinstance(chart, list) else []
+        if not rows or any(
+            not isinstance(row, dict) or (_numbers(str(row.get("value"))) - allowed) for row in rows
+        ):
+            clean.pop("chart", None)
+    return clean
 
 
 def _claim_items(value) -> list[dict]:
@@ -288,6 +337,9 @@ def narration_from_source(
             else:
                 beat_items = [{"text": line} for line in split_sentences(narration)]
             beats = [item["text"] for item in beat_items]
+            for item in beat_items:
+                if item.get("direction"):
+                    item["direction"] = _checked_direction(item["direction"], extracted, title)
             _grounded(narration, extracted, title)
             written = str(draft.get("narration") or "").strip()
             if written and written != narration:
@@ -319,6 +371,12 @@ def narration_from_source(
                 raise AppError(
                     "The script states as certain what the source only suggests. Restore the hedge in: "
                     + " | ".join(dict.fromkeys(flat))[:300]
+                )
+            model = dropped_study_model(narration, extracted)
+            if model:
+                raise AppError(
+                    f"The source's experiment was in {model}, but the narration never says so. "
+                    f"Say plainly that the finding comes from {model}."
                 )
             queries = _queries(draft.get("visual_queries"))
             return {
@@ -366,7 +424,9 @@ def plan_scenes(
             "visual_query": query[:80] or "close detail",
             "on_screen_text": label or "source",
         }
-        if action in ACTIONS:
+        if action:
             scene["action"] = action
+        if direction.get("direction"):
+            scene["direction"] = direction["direction"]
         scenes.append(scene)
     return scenes

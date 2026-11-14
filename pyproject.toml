@@ -8,6 +8,9 @@ requires-python = ">=3.12"
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+markers = [
+    "integration: renders with the real Kokoro voice and FFmpeg (no mocks). Skipped when the model is missing.",
+]
 
 [tool.ruff]
 line-length = 110

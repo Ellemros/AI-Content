@@ -3,6 +3,7 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from app.core.database import get_sessionmaker
 from app.core.seed import seed
 from app.core.time import utc_now
@@ -75,6 +76,7 @@ def _feeds(url: str = "https://example.com/plates"):
     return discover, page
 
 
+@pytest.mark.integration
 def test_automated_cycle_renders_a_playable_mp4_and_skips_the_duplicate(db):
     _enable(db)
     brand = create_brand(

@@ -17,3 +17,4 @@ data/**/*.txt
 data/models/
 data/production/
 data/**/*.ass
+data/secrets/

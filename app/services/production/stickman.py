@@ -87,19 +87,35 @@ def choose_action(narration: str, index: int, directed: str = "") -> str:
 
 
 def render_stickman_scenes(
-    scenes: list[dict], durations: list[float], work: Path
+    scenes: list[dict], durations: list[float], work: Path, *, style: str = "paper", seed: int = 0
 ) -> tuple[list[Path], list[str], list[str], list[str]]:
+    """Render each scene from the storyboard through the scene engine.
+
+    The chosen composition is written back onto the scene, so the report, the
+    transitions, and the sound effects use the same direction that was drawn.
+    """
+    from dataclasses import asdict
+
+    from app.services.production import scene_engine
+
+    specs = [
+        scene_engine.normalise(
+            dict(scene.get("direction") or {}, action=scene.get("action") or ""), index, seed, style
+        )
+        for index, scene in enumerate(scenes)
+    ]
+    specs = scene_engine.diversify(specs)
     images: list[Path] = []
     asset_ids: list[str] = []
     kinds: list[str] = []
     clip_ids: list[str] = []
-    for scene, duration in zip(scenes, durations, strict=True):
+    for scene, duration, spec in zip(scenes, durations, specs, strict=True):
         index = int(scene.get("index") or len(images) + 1)
-        action = choose_action(str(scene.get("narration") or ""), index, str(scene.get("action") or ""))
         path = work / f"scene-{index}-stickman.mp4"
-        label = str(scene.get("on_screen_text") or "").strip().upper()[:28]
-        render_scene(path, action, max(float(duration), 0.8) + 0.45, index, label=label)
-        scene["visual"] = f"stickman {action}"
+        scene_engine.render(path, spec, max(float(duration), 0.8) + 0.6)
+        scene["visual"] = f"stickman {spec.layout} {spec.action} in {spec.setting}"
+        scene["spec"] = asdict(spec)
+        scene["transition"] = spec.transition
         scene["footage"] = {
             "status": "animated",
             "asset_id": "",
@@ -109,15 +125,42 @@ def render_stickman_scenes(
             "creator": "",
             "license": "Original animation",
             "license_url": "",
-            "tags": [action],
-            "action": action,
+            "tags": [spec.layout, spec.setting, spec.action, *spec.props],
+            "action": spec.action,
             "eligible": True,
         }
         images.append(path)
         asset_ids.append("")
         kinds.append("stickman")
-        clip_ids.append(f"stickman-{index}-{action}")
+        clip_ids.append(f"stickman-{index}-{spec.layout}-{spec.setting}")
     return images, asset_ids, kinds, clip_ids
+
+
+def write_engine_sfx(path: Path, durations: list[float], scenes: list[dict]) -> Path:
+    from app.services.production import scene_engine
+
+    specs = [
+        scene_engine.SceneSpec(
+            **{
+                **scene["spec"],
+                "props": tuple(scene["spec"].get("props") or ()),
+                "chart": tuple(tuple(item) for item in scene["spec"].get("chart") or ()),
+                "labels": tuple(scene["spec"].get("labels") or ()),
+            }
+        )
+        for scene in scenes
+    ]
+    return scene_engine.write_sfx(path, durations, specs)
+
+
+def visual_variety(scenes: list[dict]) -> dict:
+    specs = [scene.get("spec") or {} for scene in scenes]
+    return {
+        "layouts": sorted({spec.get("layout", "") for spec in specs} - {""}),
+        "settings": sorted({spec.get("setting", "") for spec in specs} - {""}),
+        "cameras": sorted({spec.get("camera", "") for spec in specs} - {""}),
+        "sequence": [f"{spec.get('layout')}/{spec.get('setting')}" for spec in specs],
+    }
 
 
 def render_scene(path: Path, action: str, duration: float, index: int, label: str = "") -> None:

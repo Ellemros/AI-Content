@@ -18,6 +18,7 @@ from app.models.tables import (
     EditorialReview,
     Job,
     JobEvent,
+    PlatformPost,
     ProductionCost,
     ProductionJob,
     ProductionSchedule,
@@ -31,6 +32,7 @@ from app.models.tables import (
     Sponsorship,
     Topic,
     Video,
+    VideoMetric,
 )
 
 __all__ = [
@@ -56,6 +58,7 @@ __all__ = [
     "ProductionCost",
     "ProductionJob",
     "ProductionSchedule",
+    "PlatformPost",
     "PublishedPost",
     "PublishingJob",
     "ResearchDossier",
@@ -66,4 +69,5 @@ __all__ = [
     "Sponsorship",
     "Topic",
     "Video",
+    "VideoMetric",
 ]

@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+import pytest
 from app.core.time import utc_now
 from app.models import PublishedPost, Video
 from app.schemas.content import TopicCreate
@@ -8,6 +9,7 @@ from app.services.topics import create_topic
 from sqlalchemy import func, select
 
 
+@pytest.mark.integration
 def test_schedule_stops_before_approval_and_never_exports(db, monkeypatch):
     calls = {"n": 0}
 
