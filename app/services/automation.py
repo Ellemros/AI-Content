@@ -238,11 +238,13 @@ def videos_today(session: Session, brand_id: str, moment: datetime | None = None
     total = session.scalar(
         select(func.count())
         .select_from(ProductionJob)
+        .join(ContentOpportunity, ContentOpportunity.id == ProductionJob.opportunity_id)
         .where(
             ProductionJob.brand_id == brand_id,
             ProductionJob.status == "succeeded",
             ProductionJob.finished_at.is_not(None),
             ProductionJob.finished_at >= start,
+            ContentOpportunity.status != "test",
         )
     )
     return int(total or 0)

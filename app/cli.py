@@ -19,6 +19,7 @@ from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
 from app.services.probes import media_summary
 from app.services.production import produce_next
+from app.services.production.test_run import TEST_TITLE, run_test_production
 from app.services.research import review_script, run_discovery
 from app.services.schedule import execute_schedule
 
@@ -83,6 +84,48 @@ def _automate(slug: str) -> int:
         print(result["reason"])
     print("Published: no.")
     return 0 if result["status"] in {"succeeded", "idle", "skipped"} else 1
+
+
+def _test_production(slug: str) -> int:
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        brand = session.scalar(select(Brand).where(Brand.slug == slug))
+        if brand is None:
+            print("Brand was not found. No video was rendered or published.")
+            return 1
+        try:
+            job = run_test_production(session, brand, require_live_providers=True)
+        except AppError as exc:
+            print(exc.message)
+            print("Published: no.")
+            print("Uploaded: no.")
+            return 1
+        report = dict(job.report or {})
+        path = ""
+        if job.video_id:
+            video = session.get(Video, job.video_id)
+            path = video.path if video is not None else ""
+        quality = str(report.get("quality_status") or "")
+        explanation = str(report.get("explanation") or "")
+        warnings = list(report.get("warnings") or [])
+        error = job.error or ""
+        status = job.status
+    print(f"Topic: {TEST_TITLE}")
+    print(f"{slug}: {status}. Quality: {quality or 'unknown'}.")
+    if error:
+        print(error)
+    if explanation:
+        print(explanation)
+    for warning in warnings:
+        print(warning)
+    print("Published: no.")
+    print("Uploaded: no.")
+    if path:
+        print(f"MP4: {Path(path).resolve()}")
+    else:
+        print("MP4 was not written.")
+    return 0 if status == "succeeded" else 1
 
 
 def _produce_next(slug: str, opportunity_id: str) -> int:
@@ -166,6 +209,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Discover and produce for one active brand. Does not publish.",
     )
     auto.add_argument("--slug", required=True)
+    test_run = sub.add_parser(
+        "test-production",
+        help="Render one fixed non-medical topic. Does not discover, publish, or change other opportunities.",
+    )
+    test_run.add_argument("--slug", required=True)
     produce = sub.add_parser("produce-next", help="Render the next eligible opportunity. Does not publish.")
     produce.add_argument("--brand", required=True)
     produce.add_argument("--opportunity", default="")
@@ -181,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cycle(args.slug)
     if args.command == "run-automation":
         return _automate(args.slug)
+    if args.command == "test-production":
+        return _test_production(args.slug)
     if args.command == "produce-next":
         return _produce_next(args.brand, args.opportunity)
     if args.command == "review-script":

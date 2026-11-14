@@ -148,6 +148,12 @@ python -m app.cli produce-next --brand everyday-decisions
 python -m app.cli produce-next --brand everyday-decisions --opportunity OPPORTUNITY_ID
 ```
 
+`test-production` is a separate one-shot. It does not read feeds, does not change the status or hold reason of existing opportunities, and does not upload. It sends one fixed everyday-decision article through the same production pipeline. OpenAI and ElevenLabs must already be set; otherwise the command stops before creating a row. If no eligible licensed clip matches, it writes no MP4 and no substitute card, and the result is `needs_review`.
+
+```bash
+python -m app.cli test-production --slug everyday-decisions
+```
+
 Run `run-cycle` first so the brand has opportunities. With `OPENAI_API_KEY` set, the script is an original narration checked against the source page. Invented numbers, copied sentences, and generic openers are rejected. With no key, or when that check fails, the script is an explicit fallback built from source sentences. That fallback is not an original AI script, and the video is `needs_review`.
 
 `TTS_PROVIDER=auto` uses ElevenLabs when `ELEVENLABS_API_KEY` is set. A brand can store its own voice id. `ELEVENLABS_DEFAULT_VOICE_ID` and `ELEVENLABS_MODEL_ID` override the language voices and the model. If ElevenLabs is the planned voice and the call fails, the job fails. It does not silently switch to espeak and mark the file ready. espeak-ng and Edge stay available for offline and `render-short` renders, and a production job that used them is `needs_review`.
