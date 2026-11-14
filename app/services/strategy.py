@@ -199,3 +199,60 @@ def create_recommended_brand(session: Session) -> Brand:
     brand.identity = identity
     session.flush()
     return brand
+
+
+def add_topic(session: Session, brand: Brand, *, question: str, urls: list[str], title: str = ""):
+    """A topic chosen by a person (or a future research agent): a viewer question plus its sources.
+
+    It goes through the same holds as discovered topics and the same production gates.
+    """
+    from app.core.errors import AppError
+    from app.models import ContentOpportunity, DiscoveredItem, ResearchSource
+    from app.services.business.signals import hold_reason
+    from app.services.textutil import sha256_text
+
+    urls = [url.strip() for url in urls if url.strip().startswith(("http://", "https://"))]
+    if not question.strip() or not urls:
+        raise AppError("A topic needs a question and at least one http(s) source.")
+    source = session.scalar(select(ResearchSource).where(ResearchSource.url == "manual://topics"))
+    if source is None:
+        source = ResearchSource(
+            name="Chosen topics", kind="manual", url="manual://topics", category="facts", enabled=False
+        )
+        session.add(source)
+        session.flush()
+    headline = (title or question).strip()[:300]
+    external_id = sha256_text(headline + question + urls[0])[:40]
+    duplicate = session.scalar(
+        select(DiscoveredItem).where(
+            DiscoveredItem.source_id == source.id, DiscoveredItem.external_id == external_id
+        )
+    )
+    if duplicate is not None:
+        raise AppError("This topic, with this title and first source, was already added.")
+    item = DiscoveredItem(
+        source_id=source.id,
+        external_id=external_id,
+        title=headline,
+        summary=question,
+        summary_kind="question",
+        url=urls[0],
+        fingerprint=sha256_text(headline.lower()),
+        status="new",
+    )
+    session.add(item)
+    session.flush()
+    reason = hold_reason(headline, question, brand)
+    row = ContentOpportunity(
+        brand_id=brand.id,
+        discovered_item_id=item.id,
+        title=headline,
+        question=question.strip(),
+        source_urls=urls[:4],
+        status="held" if reason else "evaluated",
+        hold_reason=reason,
+        signals=[],
+    )
+    session.add(row)
+    session.flush()
+    return row

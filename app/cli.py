@@ -420,6 +420,18 @@ def main(argv: list[str] | None = None) -> int:
     pp = sub.add_parser("plan-posts", help="Write per-platform titles and descriptions. Uploads nothing.")
     pp.add_argument("--video", required=True)
     sub.add_parser("posts", help="List the publishing queue and history.")
+    at = sub.add_parser(
+        "add-topic", help="Add a viewer question with its sources to a brand. Renders nothing."
+    )
+    at.add_argument("--brand", required=True)
+    at.add_argument("--question", required=True)
+    at.add_argument("--title", default="")
+    at.add_argument("--url", action="append", required=True, help="Source page; repeat for more sources.")
+    rr = sub.add_parser("rerender", help="Render a motion job's picture again. No model call, no cost.")
+    rr.add_argument("--job", required=True)
+    sr = sub.add_parser("set-renderer", help="Choose a brand's renderer: motion or stickman.")
+    sr.add_argument("--brand", required=True)
+    sr.add_argument("--renderer", required=True, choices=["motion", "stickman"])
     sub.add_parser("publish-due", help="Upload due posts. Refuses while PUBLISHING_ENABLED=false.")
     sp = sub.add_parser("set-publishing", help="Set a brand's publishing mode. Does not upload anything.")
     sp.add_argument("--brand", required=True)
@@ -489,6 +501,48 @@ def main(argv: list[str] | None = None) -> int:
         "profit-report",
     }:
         return _publishing_command(args)
+    if args.command == "rerender":
+        from app.services.production.pipeline import rerender_motion
+
+        init_db()
+        with session_scope() as session:
+            job = session.get(ProductionJob, args.job)
+            if job is None:
+                print("Job was not found.")
+                return 1
+            try:
+                result = rerender_motion(session, job)
+            except AppError as exc:
+                print(exc.message)
+                return 1
+            print(f"Video: {result['video']}")
+            print(f"Status: {result['status']}. Contact sheet: {result['contact_sheet']}")
+            if result["failed"]:
+                print("Failed checks: " + ", ".join(result["failed"]))
+            print("Published: no.")
+        return 0
+    if args.command in {"add-topic", "set-renderer"}:
+        from app.services.strategy import add_topic
+
+        init_db()
+        with session_scope() as session:
+            seed(session)
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            if args.command == "set-renderer":
+                brand.identity = {**(brand.identity or {}), "renderer": args.renderer}
+                print(f"{brand.slug} renders with {args.renderer}.")
+                return 0
+            try:
+                row = add_topic(session, brand, question=args.question, urls=args.url, title=args.title)
+            except AppError as exc:
+                print(exc.message)
+                return 1
+            print(f"Opportunity: {row.id}. Status: {row.status}. Sources: {len(row.source_urls)}.")
+            if row.hold_reason:
+                print(row.hold_reason)
+        return 0
     if args.command == "cleanup-work":
         return _cleanup_work(args.days, args.apply)
     if args.command == "review-script":

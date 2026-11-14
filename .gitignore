@@ -18,3 +18,5 @@ data/models/
 data/production/
 data/**/*.ass
 data/secrets/
+renderer/node_modules/
+renderer/out/

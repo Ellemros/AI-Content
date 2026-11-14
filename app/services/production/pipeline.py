@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import threading
 from decimal import Decimal
 from pathlib import Path
@@ -357,9 +358,16 @@ def _run(
         job.stage = "retrieve"
         raise AppError("The opportunity has no source URL to retrieve.")
     job.stage = "retrieve"
-    status, html = fetch(item.url)
+    sources = []
+    if opportunity.source_urls:
+        from app.services.research import dossier as research
+
+        sources = research.build(list(opportunity.source_urls), opportunity.question or opportunity.title)
+        status, text = 200, research.combined_text(sources)
+    else:
+        status, html = fetch(item.url)
+        text = extract_article(html)
     add_cost(session, job, provider="http", operation="retrieve-source", cost=0)
-    text = extract_article(html)
     quotes = quotations_from(text)
     if len(quotes) < 3:
         job.stage = "dossier"
@@ -372,6 +380,11 @@ def _run(
     draft = _write_script(session, job, brand, topic, opportunity, item, dossier, language)
     if len(draft["beats"]) < 4:
         raise AppError("The script did not produce enough scenes.")
+    if sources:
+        from app.services.research import dossier as research
+
+        for claim in draft["claims"]:
+            claim["sources"] = [research.source_for(claim.get("source", ""), sources)]
     scenes = plan_scenes(draft["beats"], draft.get("visual_queries"), draft.get("beat_directions"))
     add_cost(session, job, provider=draft["provider"], operation="script", cost=0)
     script, version = _script(session, topic, language, draft, scenes)
@@ -395,7 +408,43 @@ def _run(
     job.stage = "visuals"
     durations = _spoken_durations(scenes, audio) or durations_for(scenes, audio.duration_seconds)
     sfx = None
-    if stickman_enabled():
+    motion_plan = None
+    if _renderer(brand) == "motion":
+        from app.services.production import motion
+
+        allowed = set(re.findall(r"\d+(?:\.\d+)?", dossier.extracted_text + " " + opportunity.title))
+        directions = draft.get("beat_directions") or []
+        motion_scenes = [
+            motion.normalise(
+                {**(directions[i].get("direction") or {}), "text": scene["narration"]},
+                allowed,
+                dossier.extracted_text,
+            )
+            if i < len(directions)
+            else motion.normalise({"text": scene["narration"]}, allowed, dossier.extracted_text)
+            for i, scene in enumerate(scenes)
+        ]
+        for scene, planned in zip(scenes, motion_scenes, strict=True):
+            scene["motion"] = planned
+            scene["visual"] = f"motion {planned['template']}"
+            scene["footage"] = {
+                "status": "animated",
+                "source": "motion",
+                "license": "Original motion graphics",
+            }
+        identity = brand.identity if isinstance(brand.identity, dict) else {}
+        motion_plan = motion.build_props(
+            motion_scenes,
+            durations,
+            (audio.metadata_json or {}).get("alignment") or {},
+            brand=brand.name,
+            theme=str(identity.get("motion_theme") or "money-minds"),
+        )
+        images, asset_ids = [], []
+        kinds = ["motion"] * len(scenes)
+        clip_ids = [f"motion-{i + 1}-{s['template']}" for i, s in enumerate(motion_scenes)]
+        add_cost(session, job, provider="remotion", operation="animation", cost=0)
+    elif stickman_enabled():
         identity = brand.identity if isinstance(brand.identity, dict) else {}
         images, asset_ids, kinds, clip_ids = render_stickman_scenes(
             scenes,
@@ -440,17 +489,30 @@ def _run(
         work_dir=work,
     )
     output = get_settings().data_dir / "videos" / f"{job.id}.mp4"
-    render_film(
-        images=images,
-        durations=durations,
-        voice=Path(audio.path),
-        music=Path(music.path),
-        srt=srt_path,
-        output=output,
-        kinds=kinds,
-        sfx=sfx,
-        transitions=[str(scene.get("transition") or "fade") for scene in scenes] if sfx is not None else None,
-    )
+    if motion_plan is not None:
+        from app.services.production import motion, visual_qa
+
+        silent = motion.render(motion_plan, work, output)
+        sfx = motion.sfx_track(work / "sfx.wav", motion_plan)
+        motion.mix(silent, Path(audio.path), Path(music.path), sfx, output)
+        motion_qa = visual_qa.inspect(output, work, motion_plan)
+        images = [Path(path) for path in motion_qa["scene_frames"]]
+    else:
+        motion_qa = None
+    if motion_plan is None:
+        render_film(
+            images=images,
+            durations=durations,
+            voice=Path(audio.path),
+            music=Path(music.path),
+            srt=srt_path,
+            output=output,
+            kinds=kinds,
+            sfx=sfx,
+            transitions=[str(scene.get("transition") or "fade") for scene in scenes]
+            if sfx is not None
+            else None,
+        )
     summary = media_summary(output)
     video = Video(
         script_id=script.id,
@@ -510,6 +572,25 @@ def _run(
         "published": False,
         "ready_for_publishing": False,
     }
+    if motion_qa is not None:
+        report = {
+            **report,
+            "checks": [*report["checks"], *motion_qa["checks"]],
+            "contact_sheet": motion_qa["contact_sheet"],
+            "human_review": motion_qa["human_review"],
+        }
+        failed_visual = [c["name"] for c in motion_qa["checks"] if c["required"] and not c["passed"]]
+        soft_visual = [c["detail"] for c in motion_qa["checks"] if not c["required"] and not c["passed"]]
+        if failed_visual:
+            report["status"] = "failed"
+        elif report["status"] != "failed":
+            # Automated checks cannot judge storytelling. A person signs off a motion video.
+            report["status"] = "needs_review"
+        report["warnings"] = [
+            *soft_visual,
+            "Awaiting human visual review of the motion-graphics video.",
+            *(report.get("warnings") or []),
+        ]
     quality_status = report["status"]
     warnings = _voice_warnings(audio, report.get("warnings") or [])
     if editorial_warning:
@@ -578,6 +659,21 @@ def _run(
 
 
 _FRAMES_LANGS = {"en", "cs"}
+
+
+def _renderer(brand: Brand) -> str:
+    """motion (Remotion templates) or the older stickman/footage path. Brand identity wins over settings."""
+    identity = brand.identity if isinstance(brand.identity, dict) else {}
+    chosen = str(identity.get("renderer") or get_settings().production_footage or "").strip().lower()
+    if chosen == "motion":
+        from app.services.production import motion
+
+        if not motion.available():
+            raise AppError(
+                "This brand renders motion graphics, but renderer/ is not installed (npm install)."
+            )
+        return "motion"
+    return chosen
 
 
 def _caption_background(brand: Brand, kinds: list[str]) -> str:
@@ -675,13 +771,30 @@ def _write_script(session, job, brand, topic, opportunity, item, dossier, langua
                 complete=writer,
                 feedback=feedback,
                 allow_fallback=False,
+                strict_hedges=not (settings.openai_factcheck_model and settings.openai_enabled()),
             )
         except AppError as exc:
             attempts.append({"passed": False, "issues": [exc.message]})
             feedback = f"The previous draft was rejected: {exc.message}"
             continue
+        words = len(draft["narration"].split())
+        floor = int(plan["target_seconds"] * 2.4 * 0.8)
+        if words < floor:
+            attempts.append(
+                {"passed": False, "issues": [f"Too short: {words} words, needs at least {floor}."]}
+            )
+            feedback = (
+                f"The previous draft was only {words} words. Write {floor} to "
+                f"{int(plan['target_seconds'] * 2.8)} words: add one concrete example and the key caveat."
+            )
+            continue
         review = _preview_review(session, topic, draft, audience)
         details = [str(issue.get("detail") or issue.get("kind")) for issue in review["issues"]]
+        if review["passed"]:
+            problems = _fact_check(session, job, draft, dossier.extracted_text)
+            if problems:
+                review = {**review, "passed": False}
+                details = [f"Fact check: {problem}" for problem in problems]
         attempts.append({"passed": review["passed"], "score": review["quality_score"], "issues": details})
         if review["passed"]:
             draft["attempts"] = attempts
@@ -896,19 +1009,28 @@ def _model_writer(
             "hedged when the source is tentative), "
             '"description": str (2 sentences, no hashtags), "hashtags": [str] (3 to 5)}.'
         )
+        motion_mode = brand is not None and _renderer(brand) == "motion"
+        if motion_mode:
+            system = _motion_system(brief, target_seconds)
+        question = ""
+        if job.opportunity_id:
+            opportunity = session.get(ContentOpportunity, job.opportunity_id)
+            question = (opportunity.question or "") if opportunity is not None else ""
         user = (
             f"Language: {language}\nAudience: {audience}\nNiche: {niche}\n"
-            f"Working title: {title}\nSource URL: {url}\n"
+            f"Working title: {title}\n"
+            + (f"Viewer question: {question}\n" if question else "")
+            + f"Source URL: {url}\n"
             f"Openings already used on this channel (write something different):\n{avoid}\n"
         )
         if feedback:
             user += f"\nRevise. {feedback}\n"
-        user += f"\nSource:\n{extracted[:6000]}"
-        provider = OpenAIProvider(session)
+        user += f"\nSources:\n{extracted[:14000] if motion_mode else extracted[:6000]}"
+        provider = OpenAIProvider(session, model=settings.openai_script_model or settings.openai_model)
         cache_key = make_cache_key(
             {
                 "provider": "openai",
-                "model": settings.openai_model,
+                "model": provider.model,
                 "operation": "production-script",
                 "system": system,
                 "user": user,
@@ -935,6 +1057,114 @@ def _model_writer(
         return parsed
 
     return complete
+
+
+def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: str) -> list[str]:
+    """A second model reads every narration sentence against the sources. Returns problems, or []."""
+    settings = get_settings()
+    if not settings.openai_enabled() or not settings.openai_factcheck_model:
+        return []
+    provider = OpenAIProvider(session, model=settings.openai_factcheck_model)
+    system = (
+        "You are a strict fact checker for an educational video. For each narration sentence, decide whether "
+        "the sources support it as worded. Flag: unsupported (not in the sources), contradicted (the sources "
+        "say otherwise), overstated (stated as certain or general when the sources hedge, "
+        "use a small sample, "
+        "a lab task, a price range, animals, or correlation), "
+        "or missing_caveat (a limitation without which a "
+        "viewer would be misled). Questions, the hook's framing of a question, and plainly labelled opinion "
+        "are fine. Be exact; do not flag style. Return JSON: "
+        '{"problems": [{"sentence": str, "kind": str, "why": str}]}. Empty list if all is supported.'
+    )
+    hints = draft.get("hedge_hints") or []
+    user = (
+        "Narration:\n"
+        + "\n".join(f"- {beat}" for beat in draft["beats"])
+        + (
+            "\n\nA word-overlap check thinks these may drop a hedge the source uses. Judge them carefully:\n"
+            + "\n".join(f"- {hint}" for hint in hints)
+            if hints
+            else ""
+        )
+        + f"\n\nSources:\n{extracted[:14000]}"
+    )
+    if (
+        get_cached(
+            session,
+            make_cache_key(
+                {
+                    "provider": "openai",
+                    "model": provider.model,
+                    "operation": "fact-check",
+                    "system": system,
+                    "user": user,
+                }
+            ),
+        )
+        is None
+    ):
+        assert_production_budget(session, job, provider._estimate(system, user))
+    result = provider.complete_json(operation="fact-check", system=system, user=user)
+    usage = session.scalar(
+        select(APIUsage).where(APIUsage.operation == "fact-check").order_by(APIUsage.created_at.desc())
+    )
+    if usage is not None:
+        add_cost(
+            session,
+            job,
+            provider="openai",
+            operation="fact-check",
+            cost=usage.estimated_cost_usd,
+            cached=usage.cached,
+        )
+    problems = result.get("problems") if isinstance(result, dict) else None
+    out = []
+    for item in problems or []:
+        if isinstance(item, dict) and item.get("sentence"):
+            sentence = str(item["sentence"])[:160]
+            why = str(item.get("why", ""))[:200]
+            out.append(f'{item.get("kind", "problem")}: "{sentence}" ({why})')
+    return out[:6]
+
+
+def _motion_system(structure_brief: str, target_seconds: int) -> str:
+    from app.services.production import motion
+
+    low, high = int(target_seconds * 2.4), int(target_seconds * 2.8)
+    return (
+        "You are the head writer and storyboard director of Money Minds, a channel that explains the "
+        "psychology of money with clean motion graphics. You write one vertical short "
+        f"(about {target_seconds} seconds spoken, {low} to {high} words) that a smart viewer would watch to "
+        "the end and send to a friend.\n"
+        "Evidence: the sources below, labelled [S1], [S2]. They are the only evidence. Paraphrase; "
+        "never copy 10 or more words. Never invent numbers, studies, names, or quotes. "
+        "Keep every limitation that changes the meaning: sample size, lab setting, price range, "
+        "animal studies, correlation. If sources "
+        "disagree, that disagreement is the story. Hedge exactly as the source does. Education only: no "
+        "advice about what the viewer should buy, borrow, or invest.\n"
+        f"Story structure: {structure_brief}\n"
+        "Craft: the first sentence is the hook, under 12 words, concrete, a tension or a surprising contrast "
+        "the viewer feels personally. Open a question early and pay it off late. Each beat adds one new "
+        "idea; never restate a fact. Use one concrete everyday example. The last beat reframes the idea in "
+        "fresh words and is not advice, not 'remember', not a call to subscribe. Plain spoken English, "
+        "short sentences. Never start a sentence with a label such as 'Why:' or 'Twist:'. If the ending "
+        "uses a concrete example (an object, a place, a person), introduce it earlier; never bring in a new "
+        "example in the last beat.\n"
+        "Banned: in today's world, let's dive in, have you ever wondered, buckle up, game changer, delve, "
+        "it's important to note, research shows, studies show, in this video.\n"
+        "Storyboard: 6 to 8 beats. Each beat is {text, template, kicker, params}. text is one or two short "
+        "spoken sentences. The picture must show the specific idea of its own sentence, not decorate it. "
+        "First beat: hook or question. Last beat: takeaway. Introduce the evidence with a study scene that "
+        "names the publication and year as they appear in the sources. Never use the same template twice in "
+        "a row. kicker is an optional 1-3 word content label such as 'The study' or 'The twist', never a "
+        "structural word like Hook, Question, or Takeaway. Numbers on screen must appear in the sources.\n"
+        f"{motion.brief()}\n"
+        'Return JSON: {"title": str (under 60 characters, curiosity, no clickbait), '
+        '"beats": [{"text": str, "template": str, "kicker": str, "params": {}}], '
+        '"claims": [{"text": str, "certainty": "established" or "hedged", "source": "S1"}] (every factual '
+        'statement in the narration, paraphrased), "description": str (2 sentences, no hashtags), '
+        '"hashtags": [str] (3 to 5)}.'
+    )
 
 
 def _reserve_voice_budget(session, job, narration: str) -> None:
@@ -989,6 +1219,8 @@ def _visual_provider(kinds: list[str], scenes: list[dict]) -> str:
     sources.discard("")
     if kinds and all(kind == "stickman" for kind in kinds):
         return "stickman"
+    if kinds and all(kind == "motion" for kind in kinds):
+        return "motion"
     if kinds and all(kind == "clip" for kind in kinds):
         if sources == {"local-stock"}:
             return "local-stock"
@@ -1186,3 +1418,81 @@ def _visuals(session, job, scenes, work: Path, *, allow_placeholder: bool = True
     if local_used:
         add_cost(session, job, provider="local-stock", operation="footage", cost=0)
     return images, asset_ids, kinds, clip_ids
+
+
+def rerender_motion(session: Session, job: ProductionJob) -> dict:
+    """Render a motion job's picture again from its stored storyboard, script, and narration.
+
+    For visual iteration: no model is called, so it costs nothing. The video stays needs_review.
+    """
+    from app.models import AudioFile
+    from app.services.production import motion, visual_qa
+
+    video = session.get(Video, job.video_id) if job.video_id else None
+    scenes = list((job.report or {}).get("scenes") or [])
+    if video is None or not scenes or not all(scene.get("motion") for scene in scenes):
+        raise AppError("Only a finished motion-graphics job can be re-rendered.")
+    brand = session.get(Brand, job.brand_id)
+    audio = session.get(AudioFile, video.audio_file_id)
+    dossier = session.scalar(
+        select(ResearchDossier).where(ResearchDossier.opportunity_id == job.opportunity_id)
+    )
+    source_text = dossier.extracted_text if dossier is not None else ""
+    allowed = set(re.findall(r"\d+(?:\.\d+)?", source_text))
+    planned = [
+        motion.normalise({**scene["motion"], "text": scene["narration"]}, allowed, source_text)
+        for scene in scenes
+    ]
+    durations = _spoken_durations(scenes, audio) or durations_for(scenes, audio.duration_seconds)
+    identity = brand.identity if isinstance(brand.identity, dict) else {}
+    props = motion.build_props(
+        planned,
+        durations,
+        (audio.metadata_json or {}).get("alignment") or {},
+        brand=brand.name,
+        theme=str(identity.get("motion_theme") or "money-minds"),
+    )
+    work = Path(video.work_dir or (get_settings().data_dir / "production" / job.id))
+    output = Path(video.path)
+    silent = motion.render(props, work, output)
+    music = next(
+        (Path(item) for item in work.glob("*.wav") if "bed" in item.name or "music" in item.name), None
+    )
+    if music is None:
+        raise AppError("The music bed of this job is missing; produce the video again instead.")
+    sfx = motion.sfx_track(work / "sfx.wav", props)
+    motion.mix(silent, Path(audio.path), music, sfx, output)
+    qa = visual_qa.inspect(output, work, props)
+    summary = media_summary(output)
+    report = dict(video.quality_report or {})
+    kept = [
+        check for check in report.get("checks", []) if check["name"] not in {c["name"] for c in qa["checks"]}
+    ]
+    failed = [check["name"] for check in qa["checks"] if check["required"] and not check["passed"]]
+    report.update(
+        {
+            "checks": [*kept, *qa["checks"]],
+            "contact_sheet": qa["contact_sheet"],
+            "status": "failed" if failed else "needs_review",
+            "warnings": ["Awaiting human visual review of the motion-graphics video."],
+        }
+    )
+    video.quality_report = report
+    video.status = "blocked" if failed else "needs_review"
+    video.duration_seconds = summary["duration"]
+    video.checksum = sha256_file(output)
+    for scene, plan in zip(scenes, planned, strict=True):
+        scene["motion"] = plan
+    job.report = {
+        **(job.report or {}),
+        "scenes": scenes,
+        "quality": report,
+        "quality_status": report["status"],
+    }
+    session.flush()
+    return {
+        "video": str(output.resolve()),
+        "status": video.status,
+        "contact_sheet": qa["contact_sheet"],
+        "failed": failed,
+    }

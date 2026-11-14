@@ -142,7 +142,17 @@ def test_a_dropped_hedge_rejects_the_model_script_without_falling_back():
 
 def test_the_writer_gets_the_rejection_and_revises(db, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_FACTCHECK_MODEL", "")  # strict word-overlap hedge check, no model call
     get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.services.strategy.choose_format",
+        lambda *_a, **_k: {
+            "structure": "explainer",
+            "target_seconds": 25,
+            "format": "short",
+            "reason": "test",
+        },
+    )
     calls = []
     bad = _storyboard()["beats"]
     bad[4] = {"text": "Crows decide with neural processes similar to primates and humans.", "action": "think"}
@@ -171,7 +181,17 @@ def test_the_writer_gets_the_rejection_and_revises(db, monkeypatch):
 
 def test_a_script_that_never_passes_stops_the_job(db, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_FACTCHECK_MODEL", "")  # strict word-overlap hedge check, no model call
     get_settings.cache_clear()
+    monkeypatch.setattr(
+        "app.services.strategy.choose_format",
+        lambda *_a, **_k: {
+            "structure": "explainer",
+            "target_seconds": 25,
+            "format": "short",
+            "reason": "test",
+        },
+    )
     monkeypatch.setattr(production_pipeline, "_model_writer", lambda *_args: lambda **_kw: _storyboard())
     monkeypatch.setattr(
         production_pipeline,
@@ -182,7 +202,7 @@ def test_a_script_that_never_passes_stops_the_job(db, monkeypatch):
             "quality_score": 40,
         },
     )
-    with pytest.raises(AppError, match="failed review after 2 drafts"):
+    with pytest.raises(AppError, match=r"failed review after \d drafts"):
         production_pipeline._write_script(
             db,
             None,

@@ -464,6 +464,9 @@ class ContentOpportunity(Base):
     hold_reason: Mapped[str] = mapped_column(Text, default="")
     production_status: Mapped[str] = mapped_column(String(32), default="blocked")
     production_block_reason: Mapped[str] = mapped_column(Text, default="")
+    # A topic framed as a viewer question, researched from several sources (research dossier).
+    question: Mapped[str] = mapped_column(Text, default="")
+    source_urls: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 

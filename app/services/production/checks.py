@@ -120,6 +120,7 @@ def assess_production(
             checks.append(_check("aspect_ratio", False, str(exc)[:200]))
     checks.append(_check("visual_motion", moved, moved_detail))
     kinds = visual_kinds or []
+    motion_graphics = bool(kinds) and all(kind == "motion" for kind in kinds)
     animated = bool(kinds) and all(kind == "stickman" for kind in kinds)
     clip_count = sum(1 for kind in kinds if kind == "clip")
     missing = sum(1 for kind in kinds if kind not in {"clip", "stickman"})
@@ -154,7 +155,10 @@ def assess_production(
             and len(unique_ids) == clip_count
             and clip_count >= min(4, len(kinds))
         )
-    if animated:
+    if motion_graphics:
+        footage_ok = True
+        footage_detail = f"{len(kinds)} motion-graphics scenes from the storyboard."
+    if animated or motion_graphics:
         pass
     elif not kinds:
         footage_detail = "Visual kind was not recorded."

@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     openai_input_cost_per_million: float = 0.15
     openai_output_cost_per_million: float = 0.60
     openai_max_output_tokens: int = 2500
+    # The production script and its fact check. Writing quality decides retention, so the script uses a
+    # stronger model than topics and metadata. Empty falls back to OPENAI_MODEL.
+    openai_script_model: str = "gpt-5.4"
+    openai_factcheck_model: str = "gpt-5.4-mini"
 
     elevenlabs_api_key: str = ""
     elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
@@ -42,7 +46,7 @@ class Settings(BaseSettings):
     kokoro_voice: str = "af_heart"
     kokoro_speed: float = 1.0
     # Model script attempts per production job. The second attempt receives the reviewer's issues.
-    script_attempts: int = 2
+    script_attempts: int = 3
     edge_voice_en: str = "en-US-AriaNeural"
     edge_voice_cs: str = "cs-CZ-VlastaNeural"
     espeak_bin: str = "espeak-ng"
