@@ -288,6 +288,7 @@ def test_gate_rejects_a_landscape_clip(tmp_path):
     assert names["scene_diversity"] is False
 
 
+@pytest.mark.integration
 def test_produce_next_writes_a_vertical_mp4(db):
     seed(db)
     brand = _brand(db, "workshop-notes", "Workshop notes")
@@ -311,13 +312,13 @@ def test_produce_next_writes_a_vertical_mp4(db):
     assert job.report["script_mode"] == "fallback"
     assert job.report["quality_status"] == "needs_review"
     assert "script" in job.report["fallbacks"]
-    assert "voice" in job.report["fallbacks"]
+    assert "voice" not in job.report["fallbacks"]
     assert job.report["visual_provider"] == "stickman"
     assert "footage" not in job.report["fallbacks"]
     assert all(scene["footage"]["status"] == "animated" for scene in job.report["scenes"])
     assert "openai" not in job.report["providers"]
     assert "dossier" in job.report["providers"]
-    assert "espeak" in job.report["providers"]
+    assert "kokoro" in job.report["providers"]
     video = db.get(Video, job.video_id)
     assert video is not None
     assert video.approved is False

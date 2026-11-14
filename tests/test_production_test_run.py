@@ -91,6 +91,7 @@ def test_health_hold_still_blocks_medical_text_and_stops_the_test(db, monkeypatc
     assert db.scalar(select(func.count()).select_from(PublishingJob)) == 0
 
 
+@pytest.mark.integration
 def test_test_run_does_not_publish_or_change_existing_opportunities(db):
     brand = _brand(db)
     held = _held_opportunity(db, brand)
