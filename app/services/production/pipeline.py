@@ -504,7 +504,7 @@ def _run(
         "clips": [scene.get("footage") for scene in scenes if isinstance(scene.get("footage"), dict)],
         "fallbacks": fallbacks,
         "quality_status": quality_status,
-        "warnings": report.get("warnings") or [],
+        "warnings": _voice_warnings(audio, report.get("warnings") or []),
         "semantic_visual": report.get("semantic_visual") or "unverified",
     }
     if test_run:
@@ -747,6 +747,14 @@ def _record_voice_cost(session, job, provider: str, narration: str) -> None:
     else:
         cost = Decimal("0")
     add_cost(session, job, provider=provider, operation="narration", cost=cost)
+
+
+def _voice_warnings(audio, quality_warnings: list) -> list[str]:
+    stored = str((audio.metadata_json or {}).get("voice_warning") or "").strip()
+    warnings = [str(item) for item in quality_warnings if str(item).strip()]
+    if stored and stored not in warnings:
+        return [stored, *warnings]
+    return warnings
 
 
 def _brand_voice(brand: Brand, language: str) -> str:

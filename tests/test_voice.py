@@ -1,7 +1,9 @@
+from app.config import get_settings
+from app.core.errors import AppError
 from app.schemas.content import TopicCreate
 from app.services.scripts import current_version, generate_script
 from app.services.topics import create_topic
-from app.services.voice import ensure_audio
+from app.services.voice import ensure_audio, speak
 
 
 def test_same_settings_skip_regeneration(db, tmp_path):
@@ -71,3 +73,31 @@ def test_changed_settings_regenerate(db):
         synthesizer=fake,
     )
     assert calls == [0.4, 0.9]
+
+
+def test_elevenlabs_refusal_still_writes_a_local_voice(monkeypatch, tmp_path):
+    def refuse(*_args, **_kwargs):
+        raise AppError("ElevenLabs returned HTTP 401: free tier disabled")
+
+    def edge(text, *, voice, stability, similarity, out_path):
+        out_path.write_bytes(b"ID3" + b"x" * 200)
+
+    monkeypatch.setattr("app.services.voice.elevenlabs_provider.synthesize", refuse)
+    monkeypatch.setattr("app.services.voice.synthesize_edge", edge)
+    monkeypatch.setattr("app.services.voice.edge_available", lambda: True)
+    raw = tmp_path / "raw.mp3"
+    actual = speak(
+        None,
+        "People keep the option that was already selected when they plan a route home.",
+        engine="elevenlabs",
+        voice="voice-id",
+        language="en",
+        stability=0.5,
+        similarity=0.75,
+        raw_path=raw,
+        settings=get_settings(),
+    )
+    assert actual == "edge"
+    assert raw.is_file()
+    assert "401" in speak.last_warning
+    assert "not ready for publishing" in speak.last_warning
