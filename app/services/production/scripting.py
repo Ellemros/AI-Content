@@ -212,12 +212,21 @@ def dropped_hedges(texts: list[str], extracted: str) -> list[str]:
     # A script sentence restating a different clause of that source sentence is not a dropped hedge.
     clauses = [_hedged_clause(sentence) for sentence in source_sentences if hedged(sentence)]
     clauses = [clause for clause in clauses if clause]
+    plain = [sentence for sentence in source_sentences if not hedged(sentence)]
     found = []
     for text in texts:
         for sentence in split_sentences(text) or [text]:
-            if hedged(sentence):
+            if hedged(sentence) or sentence.rstrip().endswith("?"):
                 continue
-            if _source_match(sentence, clauses):
+            match = _source_match(sentence, clauses)
+            if not match:
+                continue
+            # Flag only when the hedged statement is the best support. If an unhedged source sentence
+            # supports the line as well, the source states it plainly somewhere and the line is fine.
+            words = tokens(sentence)
+            hedged_overlap = len(words & tokens(match))
+            plain_overlap = max((len(words & tokens(candidate)) for candidate in plain), default=0)
+            if hedged_overlap > plain_overlap:
                 found.append(sentence)
     return found
 
@@ -252,7 +261,18 @@ def _beat_items(value) -> list[dict]:
                         "label": str(item.get("label") or item.get("on_screen_text") or "").strip(),
                         "direction": {
                             key: item.get(key)
-                            for key in ("layout", "setting", "props", "camera", "emphasis", "chart", "labels")
+                            for key in (
+                                "layout",
+                                "setting",
+                                "props",
+                                "camera",
+                                "emphasis",
+                                "chart",
+                                "labels",
+                                "template",
+                                "kicker",
+                                "params",
+                            )
                             if item.get(key) not in (None, "", [])
                         },
                     }
@@ -291,7 +311,13 @@ def _claim_items(value) -> list[dict]:
         elif isinstance(item, dict):
             text = str(item.get("text") or item.get("claim") or "").strip()
             if text:
-                items.append({"text": text, "certainty": str(item.get("certainty") or "").strip().lower()})
+                items.append(
+                    {
+                        "text": text,
+                        "certainty": str(item.get("certainty") or "").strip().lower(),
+                        "source": str(item.get("source") or ""),
+                    }
+                )
     return items
 
 
@@ -316,8 +342,12 @@ def narration_from_source(
     complete=None,
     feedback: str = "",
     allow_fallback: bool = True,
+    strict_hedges: bool = True,
 ) -> dict:
     """Return an original model script, or the labelled dossier fallback.
+
+    strict_hedges=False keeps the word-overlap hedge check as hints for a model fact checker
+    (draft["hedge_hints"]) instead of a hard rejection; the fact checker then decides.
 
     With allow_fallback=False a rejected model script raises instead, so the caller
     can ask for a revision rather than rendering stitched source sentences.
@@ -362,12 +392,13 @@ def narration_from_source(
                         "verified": True,
                         "unverified": False,
                         "certainty": _certainty(text, item.get("certainty", "")),
+                        "source": item.get("source", ""),
                     }
                 )
             if not claims:
                 raise AppError("The original script did not record a grounded claim.")
             flat = dropped_hedges(beats + [claim["text"] for claim in claims], extracted)
-            if flat:
+            if flat and strict_hedges:
                 raise AppError(
                     "The script states as certain what the source only suggests. Restore the hedge in: "
                     + " | ".join(dict.fromkeys(flat))[:300]
@@ -389,6 +420,7 @@ def narration_from_source(
                 "description": str(draft.get("description") or f"{title}. Source: {url}"),
                 "hashtags": _tags(draft.get("hashtags")),
                 "provider": "openai",
+                "hedge_hints": list(dict.fromkeys(flat)),
                 "script_mode": "original",
                 "rejected_model": "",
                 "visual_queries": queries,
