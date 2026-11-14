@@ -126,6 +126,47 @@ def _read_alignment(raw: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _speak_local(
+    text: str,
+    *,
+    language: str,
+    stability: float,
+    similarity: float,
+    raw_path: Path,
+    settings: Settings,
+    reason: str,
+) -> str:
+    if edge_available():
+        try:
+            synthesize_edge(
+                text,
+                voice=default_voice(settings, "edge", language),
+                stability=stability,
+                similarity=similarity,
+                out_path=raw_path,
+            )
+            return "edge"
+        except AppError as exc:
+            logger.warning("edge tts failed after elevenlabs", extra={"error": str(exc)[:300]})
+    if espeak_available(settings):
+        wav = raw_path.with_suffix(".wav")
+        synthesize_espeak(
+            text,
+            voice=default_voice(settings, "espeak", language),
+            stability=stability,
+            similarity=similarity,
+            out_path=wav,
+            settings=settings,
+        )
+        if wav != raw_path:
+            wav.replace(raw_path)
+        return "espeak"
+    raise AppError(
+        f"ElevenLabs refused the voice ({reason[:240]}). "
+        "No local voice is installed, so the video was not rendered."
+    )
+
+
 def speak(
     session: Session,
     text: str,
@@ -142,17 +183,34 @@ def speak(
     from app.services.production.speech import speakable
 
     text = speakable(text)
+    speak.last_warning = ""
     if engine == "elevenlabs":
-        elevenlabs_provider.synthesize(
-            session,
-            text=text,
-            voice_id=voice,
-            stability=stability,
-            similarity=similarity,
-            out_path=raw_path,
-            settings=settings,
-        )
-        return "elevenlabs"
+        try:
+            elevenlabs_provider.synthesize(
+                session,
+                text=text,
+                voice_id=voice,
+                stability=stability,
+                similarity=similarity,
+                out_path=raw_path,
+                settings=settings,
+            )
+            return "elevenlabs"
+        except AppError as exc:
+            logger.warning("elevenlabs refused, using a local voice", extra={"error": exc.message[:300]})
+            speak.last_warning = (
+                f"ElevenLabs refused the voice ({exc.message[:240]}). "
+                "A local voice was used instead. This file is not ready for publishing."
+            )
+            return _speak_local(
+                text,
+                language=language,
+                stability=stability,
+                similarity=similarity,
+                raw_path=raw_path,
+                settings=settings,
+                reason=exc.message,
+            )
     if engine == "voicestudio":
         from app.providers.voicestudio import synthesize as synthesize_voicestudio
 
@@ -232,6 +290,7 @@ def ensure_audio(
         actual = str(meta.get("provider") or planned)
         duration = float(meta["duration"])
         alignment = meta.get("alignment") if isinstance(meta.get("alignment"), dict) else None
+        warning = ""
     else:
         raw = directory / f"{version.id}-{digest[:12]}-raw.mp3"
         if planned in {"espeak", "voicestudio"}:
@@ -250,6 +309,8 @@ def ensure_audio(
         alignment = _read_alignment(raw)
         _trim(raw, final_path)
         duration = media_summary(final_path)["duration"]
+        warning = speak.last_warning if actual != planned else ""
+        speak.last_warning = ""
     if duration < 0.8:
         raise AppError("Speech engine produced no usable audio.")
     metadata = {
@@ -259,6 +320,7 @@ def ensure_audio(
         "similarity": similarity,
         "similarity_effect": "elevenlabs" if actual == "elevenlabs" else "local-approximation",
         "subtitle_timing": "character" if alignment else "phrase",
+        "voice_warning": warning,
     }
     if alignment:
         metadata["alignment"] = alignment
