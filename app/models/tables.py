@@ -449,9 +449,7 @@ class ContentOpportunity(Base):
     """A scored idea. Missing factors stay null. The score is not rescaled to hide them."""
 
     __tablename__ = "content_opportunities"
-    __table_args__ = (
-        UniqueConstraint("brand_id", "discovered_item_id", name="uq_brand_discovered_item"),
-    )
+    __table_args__ = (UniqueConstraint("brand_id", "discovered_item_id", name="uq_brand_discovered_item"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     brand_id: Mapped[str] = mapped_column(ForeignKey("brands.id"), index=True)
@@ -581,3 +579,63 @@ class ProductionCost(Base):
     estimated_cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
     cached: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PlatformPost(Base):
+    """One video on one platform: the publishing queue and its history.
+
+    (video_id, platform) is unique, so the same file can never be queued twice for a
+    platform. Status moves planned -> queued -> uploading -> published, or to failed,
+    or to needs_check when an upload may have reached the platform but did not confirm.
+    needs_check is never retried automatically, because a retry could post twice.
+    """
+
+    __tablename__ = "platform_posts"
+    __table_args__ = (UniqueConstraint("video_id", "platform", name="uq_platform_post_video_platform"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    video_id: Mapped[str] = mapped_column(ForeignKey("videos.id"), index=True)
+    platform: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), default="planned", index=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    title: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[list] = mapped_column(JSON, default=list)
+    options: Mapped[dict] = mapped_column(JSON, default=dict)
+    external_id: Mapped[str] = mapped_column(String(200), default="")
+    external_url: Mapped[str] = mapped_column(Text, default="")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    history: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class VideoMetric(Base):
+    """Measured results for one post on one day, as the platform reported them. Never estimated."""
+
+    __tablename__ = "video_metrics"
+    __table_args__ = (UniqueConstraint("post_id", "day", name="uq_video_metric_post_day"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    post_id: Mapped[str] = mapped_column(ForeignKey("platform_posts.id"), index=True)
+    video_id: Mapped[str] = mapped_column(String(36), index=True)
+    brand_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    platform: Mapped[str] = mapped_column(String(32))
+    day: Mapped[str] = mapped_column(String(10))
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    watch_minutes: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0"))
+    average_view_seconds: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    average_view_percentage: Mapped[Decimal | None] = mapped_column(Numeric(6, 2), nullable=True)
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    comments: Mapped[int] = mapped_column(Integer, default=0)
+    shares: Mapped[int] = mapped_column(Integer, default=0)
+    subscribers_gained: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    click_through_rate: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), nullable=True)
+    revenue_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    raw: Mapped[dict] = mapped_column(JSON, default=dict)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

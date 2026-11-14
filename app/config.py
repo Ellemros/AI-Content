@@ -96,6 +96,17 @@ class Settings(BaseSettings):
 
     video_fps: int = Field(default=30)
 
+    # Publishing. False refuses every upload, whatever a brand's publishing_mode says.
+    publishing_enabled: bool = False
+    publishing_poll_seconds: int = 0
+    youtube_client_secrets: Path = Path("./data/secrets/youtube_client_secret.json")
+    # private keeps a first upload visible only to you. Change to public after review.
+    youtube_privacy: str = "private"
+    tiktok_client_key: str = ""
+    tiktok_client_secret: str = ""
+    meta_graph_version: str = "v21.0"
+    secrets_dir: Path = Path("./data/secrets")
+
     def openai_enabled(self) -> bool:
         return bool(self.openai_api_key.strip())
 

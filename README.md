@@ -1,8 +1,72 @@
 # AI Content Factory
 
-Local factory for faceless short videos in English and Czech. A topic becomes a script, narration, burned-in subtitles, and a vertical MP4. Nothing is uploaded. An approved export is a file on disk plus a database record.
+Automated faceless explainer videos: research a topic, write and check an original script, narrate it with a local voice, animate it with stickman scenes, render a vertical MP4, and (when you switch it on) publish it through the platforms' official APIs.
 
-Phase 1 runs with no paid API key. OpenAI and ElevenLabs are optional.
+The recommended first channel and the reasoning are in [docs/strategy.md](docs/strategy.md).
+
+## Windows quick start (CMD)
+
+Run these from the project folder, one at a time. Python 3.12+ and FFmpeg on `PATH` are required; espeak-ng and administrator rights are not.
+
+```
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+python -m app.cli install-voice
+```
+
+Put `OPENAI_API_KEY=...` in `.env` (Notepad: `notepad .env`). Then create the recommended channel (paused, publishing off), find topics, and render one video:
+
+```
+python -m app.cli create-recommended-brand
+python -m app.cli run-cycle --slug money-minds
+python -m app.cli produce-next --brand money-minds
+```
+
+The last command prints the MP4 path. `uvicorn app.main:app` serves the dashboard at http://127.0.0.1:8000/production .
+
+## Publishing (off by default)
+
+`PUBLISHING_ENABLED=false` refuses every upload. Videos still get per-platform titles, descriptions, and tags (`python -m app.cli plan-posts --video VIDEO_ID`), and `python -m app.cli posts` lists the queue.
+
+Gates for every upload, in order:
+1. `PUBLISHING_ENABLED=true`.
+2. The emergency switch is on.
+3. The brand's mode is `approval` (you approve each video) or `autonomous` (every `ready` video).
+4. The video is `ready`; `needs_review` is never published.
+5. The daily limit per platform is not reached.
+6. The account is connected.
+
+An upload that may have reached a platform without confirming is marked `needs_check` and is never retried automatically, so a post cannot go out twice.
+
+One-time setup per platform. Tokens are saved under `data\secrets\`, which Git ignores.
+
+- **YouTube (Shorts and long-form).**
+  1. In Google Cloud Console, create a project and enable *YouTube Data API v3* and *YouTube Analytics API*.
+  2. Configure the OAuth consent screen (External, add yourself as a test user), then create an OAuth client of type *Desktop app*.
+  3. Download its JSON to `data\secrets\youtube_client_secret.json`.
+  4. Run `python -m app.cli connect-youtube --brand money-minds` and approve in the browser.
+
+  Google keeps uploads from an unverified API project **private** until the project passes Google's API audit; `YOUTUBE_PRIVACY=private` matches that. Apply for the audit when you are ready to go public.
+- **TikTok.**
+  1. Create an app at developers.tiktok.com with *Login Kit* and the *Content Posting API* (scopes `video.publish`, `user.info.basic`), and register a redirect URI.
+  2. Put `TIKTOK_CLIENT_KEY` and `TIKTOK_CLIENT_SECRET` in `.env`.
+  3. Open the authorization URL, approve, and run `python -m app.cli connect-tiktok --brand money-minds --code CODE --redirect-uri URI`.
+
+  Until TikTok audits the app, posts are visible only to you (`SELF_ONLY`).
+- **Instagram and Facebook Reels.**
+  1. You need an Instagram *Business* account linked to a Facebook Page, and a Meta app with `instagram_business_content_publish` (or `instagram_content_publish`), `pages_manage_posts`, and `pages_read_engagement`.
+  2. Generate a long-lived Page access token.
+  3. In the same CMD window, run `set META_PAGE_TOKEN=...`, then `python -m app.cli connect-meta --brand money-minds --page-id PAGE_ID --ig-user-id IG_USER_ID`.
+
+Then `python -m app.cli set-publishing --brand money-minds --mode approval --daily-limit 1`, set `PUBLISHING_ENABLED=true`, and the scheduler poller (or `python -m app.cli publish-due`) uploads approved videos at the brand's posting hour.
+
+Analytics: `python -m app.cli fetch-analytics` stores daily YouTube metrics per post. `python -m app.cli profit-report --brand money-minds` shows views, reported revenue, production cost, and profit by video, platform, and story structure. TikTok and Meta insights are not wired yet.
+
+## Housekeeping
+
+`python -m app.cli cleanup-work --days 14` lists per-job work folders older than 14 days (scene clips and stems); add `--apply` to delete them. Final MP4s are kept.
 
 ## Setup
 
@@ -225,6 +289,8 @@ pip install -r requirements-dev.txt
 pytest
 ruff check app tests scripts
 ```
+
+`pytest -m "not integration"` runs the unit tests. Platform uploads in them are mocked (`httpx.MockTransport`), and they check request order and safety gates, not live acceptance. `pytest -m integration` renders real MP4s with the real Kokoro voice and FFmpeg; those tests are skipped, not faked, when the Kokoro model is missing.
 
 ## Docker
 

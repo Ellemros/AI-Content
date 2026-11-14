@@ -57,6 +57,12 @@ class ProductionScheduler:
                 from app.services.automation import run_due_brands
 
                 run_due_brands(session)
+                try:
+                    from app.services.publishing.queue import publishing_tick
+
+                    publishing_tick(session)
+                except Exception:
+                    logger.exception("Publishing tick failed.", extra={"stage": "publishing", "attempt": 1})
         except Exception:
             logger.exception("Scheduler tick failed.", extra={"stage": "scheduler", "attempt": 1})
 

@@ -13,7 +13,7 @@ from app.core.errors import AppError, DuplicateTopicError
 from app.core.logging import configure_logging
 from app.core.seed import seed
 from app.domain import CATEGORIES, PLATFORMS
-from app.models import Brand, ProductionSchedule, PublishedPost, Script, Video
+from app.models import Brand, ProductionJob, ProductionSchedule, PublishedPost, Script, Video
 from app.services.automation import run_brand_production
 from app.services.business.cycle import run_brand_cycle
 from app.services.pipeline import produce_short
@@ -194,6 +194,160 @@ def _produce_next(slug: str, opportunity_id: str, retry: bool = False) -> int:
         return 0 if job.status == "succeeded" else 1
 
 
+def _brand_or_none(session, slug: str):
+    brand = session.scalar(select(Brand).where(Brand.slug == slug))
+    if brand is None:
+        print(f"No brand with slug {slug}.")
+    return brand
+
+
+def _publishing_command(args) -> int:
+    import json as _json
+    import os as _os
+
+    from app.models import PlatformPost
+    from app.services.publishing import credentials
+    from app.services.publishing.analytics import fetch_youtube, profit_report
+    from app.services.publishing.queue import plan_posts, publish_due, publishing_blocked, queue_ready
+
+    init_db()
+    with session_scope() as session:
+        seed(session)
+        if args.command == "plan-posts":
+            video = session.get(Video, args.video)
+            if video is None:
+                print("Video was not found.")
+                return 1
+            job_brand = session.scalar(
+                select(Brand)
+                .join(ProductionJob, ProductionJob.brand_id == Brand.id)
+                .where(ProductionJob.video_id == video.id)
+            )
+            if job_brand is None:
+                print("This video was not made by a brand, so it has no publishing plan.")
+                return 1
+            for post in plan_posts(session, video, job_brand):
+                print(f"[{post.platform}] {post.status}")
+                print(f"  title: {post.title}")
+                print("  description: " + post.description.replace(chr(10), " | ")[:400])
+            print("Planned only. Nothing was uploaded.")
+            return 0
+        if args.command == "posts":
+            rows = session.scalars(
+                select(PlatformPost).order_by(PlatformPost.created_at.desc()).limit(50)
+            ).all()
+            for post in rows:
+                print(
+                    f"{post.platform:15} {post.status:12} {str(post.scheduled_at or '')[:16]:16} "
+                    f"{post.video_id[:8]} {post.external_url or post.last_error[:60]}"
+                )
+            print(publishing_blocked(session) or "Publishing is enabled.")
+            return 0
+        if args.command == "publish-due":
+            brands = session.scalars(select(Brand)).all()
+            for brand in brands:
+                queue_ready(session, brand)
+            session.commit()
+            result = publish_due(session)
+            print(result.get("reason") or f"Published {result['published']} of {result['due']} due posts.")
+            return 0 if result["status"] != "refused" else 2
+        if args.command == "set-publishing":
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            brand.publishing_mode = args.mode
+            brand.daily_publish_limit = args.daily_limit
+            print(f"{brand.slug}: publishing_mode={args.mode}, daily_publish_limit={args.daily_limit}.")
+            print(
+                publishing_blocked(session)
+                or "PUBLISHING_ENABLED is true: queued posts will upload when due."
+            )
+            return 0
+        if args.command == "connect-youtube":
+            from app.services.publishing.connectors import PublishError, youtube_authorize
+
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            try:
+                token = youtube_authorize()
+            except PublishError as exc:
+                print(exc.message)
+                return 1
+            path = credentials.save(brand.slug, "youtube_short", token)
+            print(f"YouTube connected for {brand.slug}. Token saved to {path.resolve()} (not in Git).")
+            return 0
+        if args.command == "connect-tiktok":
+            from app.services.publishing.connectors import tiktok_exchange_code
+
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            token = tiktok_exchange_code(args.code, args.redirect_uri)
+            path = credentials.save(brand.slug, "tiktok", token)
+            print(f"TikTok connected for {brand.slug}. Token saved to {path.resolve()} (not in Git).")
+            return 0
+        if args.command == "connect-meta":
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            token = _os.environ.get("META_PAGE_TOKEN", "").strip()
+            if not token:
+                print("Set META_PAGE_TOKEN in this terminal first (a long-lived Page access token).")
+                return 1
+            data = {"page_id": args.page_id, "ig_user_id": args.ig_user_id, "page_access_token": token}
+            path = credentials.save(brand.slug, "instagram_reel", data)
+            print(f"Meta connected for {brand.slug}. Token saved to {path.resolve()} (not in Git).")
+            return 0
+        if args.command == "fetch-analytics":
+            result = fetch_youtube(session, days=args.days)
+            print(f"YouTube posts: {result['posts']}. Metric rows stored: {result['rows']}.")
+            for error in result["errors"]:
+                print(error)
+            return 0
+        if args.command == "profit-report":
+            brand = _brand_or_none(session, args.brand)
+            if brand is None:
+                return 1
+            print(_json.dumps(profit_report(session, brand), indent=2, default=str))
+            return 0
+    return 1
+
+
+def _cleanup_work(days: int, apply: bool) -> int:
+    """Delete per-job work folders (scene clips, audio stems) of finished jobs. Final MP4s are kept."""
+    import shutil
+    from datetime import timedelta
+
+    from app.core.time import utc_now
+
+    init_db()
+    root = get_settings().data_dir / "production"
+    freed = 0
+    removed = 0
+    with session_scope() as session:
+        cutoff = utc_now() - timedelta(days=days)
+        for folder in sorted(root.glob("*")) if root.is_dir() else []:
+            job = session.get(ProductionJob, folder.name)
+            if job is None or job.status == "running":
+                continue
+            finished = job.finished_at
+            if finished is not None and finished.tzinfo is None:
+                finished = finished.replace(tzinfo=cutoff.tzinfo)
+            if finished is None or finished > cutoff:
+                continue
+            size = sum(item.stat().st_size for item in folder.rglob("*") if item.is_file())
+            freed += size
+            removed += 1
+            if apply:
+                shutil.rmtree(folder, ignore_errors=True)
+    verb = "Removed" if apply else "Would remove"
+    print(f"{verb} {removed} work folders, {freed / 1_048_576:.1f} MB. Final videos are kept.")
+    if not apply:
+        print("Add --apply to delete.")
+    return 0
+
+
 def _review(script_id: str) -> int:
     init_db()
     with session_scope() as session:
@@ -259,6 +413,39 @@ def main(argv: list[str] | None = None) -> int:
         help="Allow one more attempt for --opportunity after the attempt limit. Holds still apply.",
     )
     sub.add_parser("install-voice", help="Download the local Kokoro voice model (about 350 MB, once).")
+    sub.add_parser(
+        "create-recommended-brand",
+        help="Create the recommended Money Minds channel, paused, publishing off. Changes no other brand.",
+    )
+    pp = sub.add_parser("plan-posts", help="Write per-platform titles and descriptions. Uploads nothing.")
+    pp.add_argument("--video", required=True)
+    sub.add_parser("posts", help="List the publishing queue and history.")
+    sub.add_parser("publish-due", help="Upload due posts. Refuses while PUBLISHING_ENABLED=false.")
+    sp = sub.add_parser("set-publishing", help="Set a brand's publishing mode. Does not upload anything.")
+    sp.add_argument("--brand", required=True)
+    sp.add_argument("--mode", required=True, choices=["test", "approval", "autonomous"])
+    sp.add_argument("--daily-limit", type=int, default=1)
+    cy = sub.add_parser("connect-youtube", help="One-time Google sign-in for a brand's YouTube channel.")
+    cy.add_argument("--brand", required=True)
+    ct = sub.add_parser("connect-tiktok", help="Exchange a TikTok authorization code for a brand.")
+    ct.add_argument("--brand", required=True)
+    ct.add_argument("--code", required=True)
+    ct.add_argument("--redirect-uri", required=True)
+    cm = sub.add_parser(
+        "connect-meta", help="Store a Page token (from META_PAGE_TOKEN) for Instagram and Facebook."
+    )
+    cm.add_argument("--brand", required=True)
+    cm.add_argument("--page-id", required=True)
+    cm.add_argument("--ig-user-id", required=True)
+    fa = sub.add_parser("fetch-analytics", help="Pull YouTube Analytics for published posts.")
+    fa.add_argument("--days", type=int, default=28)
+    pr = sub.add_parser(
+        "profit-report", help="Views, reported revenue, cost, and profit by video and format."
+    )
+    pr.add_argument("--brand", required=True)
+    cw = sub.add_parser("cleanup-work", help="Delete old per-job work folders. Keeps final videos.")
+    cw.add_argument("--days", type=int, default=14)
+    cw.add_argument("--apply", action="store_true")
     review = sub.add_parser("review-script", help="Score one script for originality and unsupported claims.")
     review.add_argument("--id", required=True)
     args = parser.parse_args(argv)
@@ -280,6 +467,30 @@ def main(argv: list[str] | None = None) -> int:
         return _produce_next(args.brand, args.opportunity, args.retry)
     if args.command == "install-voice":
         return _install_voice()
+    if args.command == "create-recommended-brand":
+        from app.services.strategy import create_recommended_brand
+
+        init_db()
+        with session_scope() as session:
+            seed(session)
+            brand = create_recommended_brand(session)
+            print(f"Brand: {brand.name} ({brand.slug}). Status: {brand.status}.")
+            print(f"Publishing: {brand.publishing_mode}. Automation on: {brand.automation_enabled}.")
+        return 0
+    if args.command in {
+        "plan-posts",
+        "posts",
+        "publish-due",
+        "set-publishing",
+        "connect-youtube",
+        "connect-tiktok",
+        "connect-meta",
+        "fetch-analytics",
+        "profit-report",
+    }:
+        return _publishing_command(args)
+    if args.command == "cleanup-work":
+        return _cleanup_work(args.days, args.apply)
     if args.command == "review-script":
         return _review(args.id)
     if args.command == "render-short" and args.export and not args.approve:
