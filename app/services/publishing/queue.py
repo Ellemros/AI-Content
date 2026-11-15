@@ -28,6 +28,16 @@ from app.services.publishing.connectors import PUBLISHERS, PublishError
 DEFAULT_PLATFORMS = list(metadata.SHORT_PLATFORMS)
 
 
+
+# A video passed QA (ready) or a person approved it (approve_video sets "approved").
+PUBLISHABLE = {"ready", "approved"}
+
+def needs_person(video: Video) -> bool:
+    """Videos whose QA report asks for a human sign-off are never published unapproved, in any mode."""
+    report = video.quality_report if isinstance(video.quality_report, dict) else {}
+    return bool(report.get("human_review"))
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -122,9 +132,9 @@ def queue_ready(session: Session, brand: Brand) -> int:
     moved = 0
     for post in rows:
         video = session.get(Video, post.video_id)
-        if video is None or video.status != "ready":
+        if video is None or video.status not in PUBLISHABLE:
             continue
-        if mode == "approval" and not video.approved:
+        if (mode == "approval" or needs_person(video)) and not video.approved:
             continue
         post.status = "queued"
         post.scheduled_at = _next_slot(session, brand, post.platform, _now())
@@ -177,7 +187,9 @@ def _publish_one(session: Session, post: PlatformPost, client: httpx.Client) -> 
     if brand.status == "paused" or (brand.publishing_mode or "test") not in {"approval", "autonomous"}:
         _note(post, "skipped", "The brand is paused or not in a publishing mode.")
         return False
-    if video.status != "ready" or (brand.publishing_mode == "approval" and not video.approved):
+    if video.status not in PUBLISHABLE or (
+        (brand.publishing_mode == "approval" or needs_person(video)) and not video.approved
+    ):
         _note(post, "skipped", "The video is not ready, or not approved in approval mode.")
         return False
     creds = credentials.load(brand.slug, post.platform)
@@ -234,7 +246,7 @@ def publishing_tick(session: Session) -> dict:
         ).all()
         for job in jobs:
             video = session.get(Video, job.video_id)
-            if video is None or video.status != "ready":
+            if video is None or video.status not in PUBLISHABLE:
                 continue
             has_post = session.scalar(select(PlatformPost.id).where(PlatformPost.video_id == video.id))
             if has_post is None:

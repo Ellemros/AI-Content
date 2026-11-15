@@ -25,6 +25,7 @@ def db(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("ELEVENLABS_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     monkeypatch.setenv("TTS_PROVIDER", "kokoro")
     monkeypatch.setenv("MONTHLY_SPEND_CAP_USD", "25")
     monkeypatch.setenv("SCHEDULER_POLL_SECONDS", "0")

@@ -24,6 +24,9 @@ MODEL_PRICES = {
 }
 
 
+REASONING_MAX_OUTPUT = 16000
+
+
 def is_reasoning(model: str) -> bool:
     return model.startswith(("gpt-5", "o1", "o3", "o4"))
 
@@ -119,8 +122,10 @@ class OpenAIProvider:
 
     def _estimate(self, system: str, user: str) -> Decimal:
         input_tokens = Decimal(len(system) + len(user)) / Decimal(4)
-        # Reasoning models spend hidden tokens; budget for a long answer.
-        output_tokens = Decimal(12000 if is_reasoning(self.model) else self.settings.openai_max_output_tokens)
+        # The worst case: every output token the request allows (reasoning models spend hidden tokens).
+        output_tokens = Decimal(
+            REASONING_MAX_OUTPUT if is_reasoning(self.model) else self.settings.openai_max_output_tokens
+        )
         million = Decimal(1_000_000)
         price_in, price_out = self.prices()
         return input_tokens / million * price_in + output_tokens / million * price_out
@@ -137,7 +142,7 @@ class OpenAIProvider:
             ],
         }
         if is_reasoning(model):
-            body["max_completion_tokens"] = 16000
+            body["max_completion_tokens"] = REASONING_MAX_OUTPUT
             body["reasoning_effort"] = "medium"
         else:
             body["temperature"] = 0.4

@@ -20,3 +20,4 @@ data/**/*.ass
 data/secrets/
 renderer/node_modules/
 renderer/out/
+output/

@@ -189,6 +189,127 @@ export const Lightbulb: React.FC<ObjProps> = ({t, th, size, style}) => (
 	</Box>
 );
 
+export const WineGlass: React.FC<ObjProps> = ({t, th, size, style}) => {
+	const wave = 6 * Math.sin(t * Math.PI * 2);
+	return (
+		<Box size={size} style={style}>
+			<path d="M58 22 L142 22 C 146 74 128 104 100 106 C 72 104 54 74 58 22 Z" fill={th.card} {...S(th)} />
+			<path d={`M62 56 Q 81 ${50 + wave} 100 56 T 138 56 C 134 88 120 100 100 100 C 80 100 66 88 62 56 Z`} fill="#8E2B4B" stroke="none" />
+			<path d="M58 22 L142 22 C 146 74 128 104 100 106 C 72 104 54 74 58 22 Z" fill="none" {...S(th)} />
+			<path d="M100 106 L100 166 M64 176 L136 176" fill="none" {...S(th)} />
+			<path d="M76 34 q -4 22 4 40" fill="none" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" opacity="0.8" />
+		</Box>
+	);
+};
+
+export const Bottle: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<g transform={`rotate(${-6 + 12 * t} 100 180)`}>
+			<path d="M86 14 L114 14 L114 58 C 140 70 146 88 146 108 L146 176 C 146 184 140 188 132 188 L68 188 C 60 188 54 184 54 176 L54 108 C 54 88 60 70 86 58 Z" fill="#2F5D46" {...S(th)} />
+			<rect x="64" y="112" width="72" height="50" rx="8" fill={th.card} {...S(th)} strokeWidth={5} />
+			<rect x="78" y="128" width="44" height="7" rx="3.5" fill={th.alert} />
+			<rect x="84" y="142" width="32" height="6" rx="3" fill={th.line} />
+			<rect x="84" y="8" width="32" height="16" rx="4" fill={th.alert} {...S(th)} strokeWidth={5} />
+		</g>
+	</Box>
+);
+
+export const Jar: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<rect x="46" y={34 - 18 * t} width="108" height="26" rx="8" fill={th.gold} {...S(th)} transform={`rotate(${-10 * t} 154 ${34 - 18 * t})`} />
+		<path d="M52 64 L148 64 L152 84 C 160 96 160 108 160 118 L160 168 C 160 180 152 188 140 188 L60 188 C 48 188 40 180 40 168 L40 118 C 40 108 40 96 48 84 Z" fill="#C8324F" {...S(th)} />
+		<rect x="58" y="116" width="84" height="44" rx="8" fill={th.card} {...S(th)} strokeWidth={5} />
+		<path d="M72 138 l 56 0" stroke={th.inkSoft} strokeWidth="6" strokeLinecap="round" />
+		<path d="M60 96 q -6 14 0 28" fill="none" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" opacity="0.7" />
+	</Box>
+);
+
+export const FlatBox: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<path d="M24 82 L100 52 L176 82 L176 168 L100 194 L24 168 Z" fill="#D9A86C" {...S(th)} />
+		<path d="M24 82 L100 110 L176 82 M100 110 L100 194" fill="none" {...S(th)} />
+		<path d={`M24 82 L100 110 L${80 - 40 * t} ${70 - 40 * t} L${8 - 10 * t} ${48 - 30 * t} Z`} fill="#E8BE86" {...S(th)} />
+		<path d="M118 140 L162 124 L162 146 L118 162 Z" fill={th.card} stroke={th.ink} strokeWidth="5" strokeLinejoin="round" />
+	</Box>
+);
+
+export const Chair: React.FC<ObjProps> = ({t, th, size, style}) => {
+	const drop = 40 * (1 - Math.min(1, t * 1.6));
+	return (
+		<Box size={size} style={style}>
+			<rect x="62" y={18 - drop} width="76" height="64" rx="10" fill={th.gold} {...S(th)} />
+			<rect x="52" y="96" width="96" height="24" rx="8" fill={th.gold} {...S(th)} />
+			<path d={`M68 ${82 - drop} L68 96 M132 ${82 - drop} L132 96`} {...S(th)} />
+			<path d="M62 120 L56 188 M138 120 L144 188 M92 120 L92 176 M108 120 L108 176" fill="none" {...S(th)} />
+			<path d="M150 40 l 14 -8 M154 58 l 18 0" stroke={th.accent} strokeWidth="6" strokeLinecap="round" opacity={t > 0.6 ? 1 : 0} />
+		</Box>
+	);
+};
+
+export const Taxi: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<g transform={`translate(${-14 + 14 * t}, 0)`}>
+			<rect x="80" y="44" width="40" height="18" rx="5" fill={th.card} {...S(th)} strokeWidth={5} />
+			<path d="M28 132 L40 96 C 44 84 52 76 64 76 L136 76 C 148 76 156 84 160 96 L172 132 Z" fill={th.gold} {...S(th)} />
+			<rect x="16" y="126" width="168" height="40" rx="14" fill={th.gold} {...S(th)} />
+			<path d="M54 96 L96 96 L96 124 L46 124 Z M104 96 L146 96 L154 124 L104 124 Z" fill="#BFE3F5" stroke={th.ink} strokeWidth="5" strokeLinejoin="round" />
+			<path d="M16 146 L184 146" stroke={th.ink} strokeWidth="4" strokeDasharray="10 8" />
+			<circle cx="56" cy="168" r="18" fill={th.ink} />
+			<circle cx="144" cy="168" r="18" fill={th.ink} />
+			<circle cx="56" cy="168" r="6" fill={th.line} />
+			<circle cx="144" cy="168" r="6" fill={th.line} />
+		</g>
+	</Box>
+);
+
+export const Mug: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		{[0, 1, 2].map((i) => (
+			<path key={i} d={`M${72 + i * 26} ${58 - 10 * t} q -10 -14 0 -28 q 10 -14 0 -28`} fill="none" stroke={th.inkSoft} strokeWidth="5" strokeLinecap="round" opacity={0.25 + 0.6 * t} />
+		))}
+		<path d="M148 92 C 186 92 186 150 146 150" fill="none" stroke={th.ink} strokeWidth="14" strokeLinecap="round" />
+		<path d="M148 92 C 186 92 186 150 146 150" fill="none" stroke={th.accent} strokeWidth="6" strokeLinecap="round" />
+		<rect x="38" y="70" width="114" height="116" rx="18" fill={th.accent} {...S(th)} />
+		<rect x="58" y="108" width="74" height="34" rx="8" fill={th.card} stroke={th.ink} strokeWidth="5" />
+		<text x="95" y="134" textAnchor="middle" fontSize="24" fontWeight="800" fill={th.ink} fontFamily="Inter">MINE</text>
+	</Box>
+);
+
+export const House: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<path d="M20 98 L100 30 L180 98" fill="none" {...S(th)} strokeWidth={9} />
+		<rect x="40" y="90" width="120" height="96" rx="6" fill={th.card} {...S(th)} />
+		<rect x="86" y="126" width="30" height="60" rx="4" fill={th.alert} {...S(th)} strokeWidth={5} />
+		<rect x="54" y="110" width="24" height="24" rx="3" fill={t > 0.4 ? th.gold : '#BFE3F5'} stroke={th.ink} strokeWidth="5" />
+		<rect x="124" y="110" width="24" height="24" rx="3" fill={t > 0.7 ? th.gold : '#BFE3F5'} stroke={th.ink} strokeWidth="5" />
+		<rect x="132" y="40" width="20" height="36" fill={th.inkSoft} {...S(th)} strokeWidth={5} />
+	</Box>
+);
+
+export const Menu: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<rect x="36" y="14" width="128" height="176" rx="12" fill={th.card} {...S(th)} />
+		{[0, 1, 2].map((i) => (
+			<g key={i} opacity={t * 3 > i ? 1 : 0.2}>
+				<rect x="54" y={44 + i * 48} width={48} height="10" rx="5" fill={th.inkSoft} />
+				<rect x="54" y={60 + i * 48} width={30} height="8" rx="4" fill={th.line} />
+				<rect x="116" y={42 + i * 48} width="34" height="22" rx="6" fill={i === 1 ? th.gold : th.line} stroke={th.ink} strokeWidth="4" />
+			</g>
+		))}
+	</Box>
+);
+
+export const Gift: React.FC<ObjProps> = ({t, th, size, style}) => (
+	<Box size={size} style={style}>
+		<rect x="34" y="88" width="132" height="98" rx="10" fill={th.alert} {...S(th)} />
+		<g transform={`translate(0, ${-22 * t}) rotate(${-8 * t} 30 70)`}>
+			<rect x="24" y="62" width="152" height="32" rx="8" fill="#F07E64" {...S(th)} />
+			<path d="M100 62 C 80 30 52 40 66 58 M100 62 C 120 30 148 40 134 58" fill="none" stroke={th.gold} strokeWidth="9" strokeLinecap="round" />
+		</g>
+		<rect x="90" y="88" width="20" height="98" fill={th.gold} stroke={th.ink} strokeWidth="5" />
+	</Box>
+);
+
 export const OBJECTS: Record<string, React.FC<any>> = {
 	card: CreditCard,
 	cash: Cash,
@@ -207,5 +328,15 @@ export const OBJECTS: Record<string, React.FC<any>> = {
 	person: Person,
 	chart: Chart,
 	lightbulb: Lightbulb,
+	wine: WineGlass,
+	bottle: Bottle,
+	jar: Jar,
+	box: FlatBox,
+	chair: Chair,
+	taxi: Taxi,
+	mug: Mug,
+	house: House,
+	menu: Menu,
+	gift: Gift,
 };
 export const OBJECT_NAMES = Object.keys(OBJECTS);
