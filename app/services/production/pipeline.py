@@ -609,7 +609,9 @@ def _run(
             quality_status = "needs_review"
         report = {**report, "status": quality_status, "warnings": warnings}
     video.quality_report = report
+    kept = {key: value for key, value in (job.report or {}).items() if key in {"hook_choice", "check_models"}}
     job.report = {
+        **kept,
         "providers": providers,
         "rejected_model": draft.get("rejected_model") or "",
         "script_attempts": draft.get("attempts") or [],
@@ -1098,6 +1100,8 @@ def _model_writer(
                 cost=usage.estimated_cost_usd,
                 cached=usage.cached,
             )
+        if motion_mode:
+            parsed = _choose_hook(session, job, parsed, question)
         return parsed
 
     return complete
@@ -1105,10 +1109,10 @@ def _model_writer(
 
 def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: str) -> list[str]:
     """A second model reads every narration sentence against the sources. Returns problems, or []."""
-    settings = get_settings()
-    if not settings.openai_enabled() or not settings.openai_factcheck_model:
+    from app.services.production.llm import cheap_available, cheap_json
+
+    if not cheap_available():
         return []
-    provider = OpenAIProvider(session, model=settings.openai_factcheck_model)
     system = (
         "You are a strict fact checker for an educational video. For each narration sentence, decide whether "
         "the sources support it as worded. Flag: unsupported (not in the sources), contradicted (the sources "
@@ -1145,35 +1149,7 @@ def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: st
         )
         + f"\n\nSources:\n{extracted[:14000]}"
     )
-    if (
-        get_cached(
-            session,
-            make_cache_key(
-                {
-                    "provider": "openai",
-                    "model": provider.model,
-                    "operation": "fact-check",
-                    "system": system,
-                    "user": user,
-                }
-            ),
-        )
-        is None
-    ):
-        assert_production_budget(session, job, provider._estimate(system, user))
-    result = provider.complete_json(operation="fact-check", system=system, user=user)
-    usage = session.scalar(
-        select(APIUsage).where(APIUsage.operation == "fact-check").order_by(APIUsage.created_at.desc())
-    )
-    if usage is not None:
-        add_cost(
-            session,
-            job,
-            provider="openai",
-            operation="fact-check",
-            cost=usage.estimated_cost_usd,
-            cached=usage.cached,
-        )
+    result = cheap_json(session, job, operation="fact-check", system=system, user=user)
     problems = result.get("problems") if isinstance(result, dict) else None
     out = []
     for item in problems or []:
@@ -1184,16 +1160,73 @@ def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: st
     return out[:6]
 
 
+def _choose_hook(session: Session, job: ProductionJob, parsed: dict, question: str) -> dict:
+    """A separate editor picks the strongest of the writer's three hooks; beat 1 becomes that hook.
+
+    The writer favours its own first idea. A second reader, judging only the opening against the
+    rest of the script, picks the line most likely to stop a scroll without overpromising.
+    Any failure keeps the writer's own beat 1.
+    """
+    if not isinstance(parsed, dict):
+        return parsed
+    options = [
+        option
+        for option in parsed.get("hook_options") or []
+        if isinstance(option, dict) and str(option.get("text") or "").strip()
+    ][:3]
+    beats = parsed.get("beats") if isinstance(parsed.get("beats"), list) else []
+    if len(options) < 2 or not beats or not isinstance(beats[0], dict):
+        return parsed
+    rest = " ".join(str(beat.get("text", "")) for beat in beats[1:] if isinstance(beat, dict))[:2500]
+    system = (
+        "You choose the opening line of a vertical short. Viewers decide in one second whether to keep "
+        "watching. Pick the option that is most concrete and most surprising, that a broad audience "
+        "feels personally, and that the rest of the script fully pays off. Reject any option that "
+        'promises more than the script shows. Return JSON: {"choice": 1-based int, "why": str}.'
+    )
+    user = (
+        (f"Viewer question: {question}\n" if question else "")
+        + "Options:\n"
+        + "\n".join(f"{index + 1}. {option['text']}" for index, option in enumerate(options))
+        + f"\n\nRest of the script:\n{rest}"
+    )
+    try:
+        from app.services.production.llm import cheap_json
+
+        result = cheap_json(session, job, operation="hook-choice", system=system, user=user)
+        choice = int(result.get("choice")) - 1
+    except (AppError, TypeError, ValueError):
+        return parsed
+    if not 0 <= choice < len(options):
+        return parsed
+    chosen = options[choice]
+    first = dict(beats[0])
+    first["text"] = str(chosen["text"]).strip()
+    params = dict(first.get("params") or {}) if isinstance(first.get("params"), dict) else {}
+    key = "question" if first.get("template") == "question" else "headline"
+    params[key] = str(chosen.get("headline") or chosen["text"]).strip()
+    first["params"] = params
+    job.report = {
+        **(job.report or {}),
+        "hook_choice": {
+            "options": [option["text"] for option in options],
+            "chosen": choice + 1,
+            "why": str(result.get("why") or "")[:300],
+        },
+    }
+    return {**parsed, "beats": [first, *beats[1:]]}
+
+
 def _story_review(session: Session, job: ProductionJob, draft: dict, opportunity) -> dict:
     """An editor model judges what heuristics cannot: does the hook deliver, is there a payoff,
     does each picture show its sentence. Blocking problems send the draft back for a rewrite.
 
     Returns {} when no review model is configured (the video then waits for a person anyway).
     """
-    settings = get_settings()
-    if not settings.openai_enabled() or not settings.openai_factcheck_model:
+    from app.services.production.llm import cheap_available, cheap_json
+
+    if not cheap_available():
         return {}
-    provider = OpenAIProvider(session, model=settings.openai_factcheck_model)
     system = (
         "You are the senior editor of a short-form explainer channel about the psychology of money. "
         "You decide whether a script and storyboard are good enough to film. Judge strictly but fairly; "
@@ -1207,6 +1240,8 @@ def _story_review(session: Session, job: ProductionJob, draft: dict, opportunity
         "4. filler: beats that repeat an earlier point or add nothing.\n"
         "5. causation: wording that presents a correlation or a single lab result as a proven "
         "general cause.\n"
+        "6. loop: does the last sentence call back to the hook so the video flows back into its start? "
+        "(report it as loops: bool; a missing callback is advice, not a blocker)\n"
         'Return JSON: {"hook_delivers": bool, "misleading_hook": bool, "payoff": bool, '
         '"generic_ending": bool, "mismatched_scenes": [int] (1-based), "filler_beats": [int], '
         '"causal_overreach": [str], "notes": str (two sentences of concrete editing advice), '
@@ -1227,30 +1262,7 @@ def _story_review(session: Session, job: ProductionJob, draft: dict, opportunity
         + "Beats:\n"
         + "\n".join(lines)
     )
-    cache_key = make_cache_key(
-        {
-            "provider": "openai",
-            "model": provider.model,
-            "operation": "story-review",
-            "system": system,
-            "user": user,
-        }
-    )
-    if get_cached(session, cache_key) is None:
-        assert_production_budget(session, job, provider._estimate(system, user))
-    result = provider.complete_json(operation="story-review", system=system, user=user)
-    usage = session.scalar(
-        select(APIUsage).where(APIUsage.operation == "story-review").order_by(APIUsage.created_at.desc())
-    )
-    if usage is not None:
-        add_cost(
-            session,
-            job,
-            provider="openai",
-            operation="story-review",
-            cost=usage.estimated_cost_usd,
-            cached=usage.cached,
-        )
+    result = cheap_json(session, job, operation="story-review", system=system, user=user)
     result = result if isinstance(result, dict) else {}
     blocking: list[str] = []
     if result.get("misleading_hook"):
@@ -1272,7 +1284,8 @@ def _story_review(session: Session, job: ProductionJob, draft: dict, opportunity
     notes = str(result.get("notes") or "")[:400]
     if blocking and notes:
         blocking.append(f"editor notes: {notes}")
-    return {**result, "blocking": blocking, "model": provider.model}
+    used = ((job.report or {}).get("check_models") or {}).get("story-review", "")
+    return {**result, "blocking": blocking, "model": used}
 
 
 def _motion_system(structure_brief: str, target_seconds: int) -> str:
@@ -1297,17 +1310,25 @@ def _motion_system(structure_brief: str, target_seconds: int) -> str:
         "fresh words and is not advice, not 'remember', not a call to subscribe. Plain spoken English, "
         "short sentences. Never start a sentence with a label such as 'Why:' or 'Twist:'. If the ending "
         "uses a concrete example (an object, a place, a person), introduce it earlier; never bring in a new "
-        "example in the last beat.\n"
+        "example in the last beat. The last sentence calls back to the hook (its image, object, or question) "
+        "so the end flows straight back into the start and the video loops.\n"
+        "Hooks: write three different first sentences in hook_options, each under 12 words: one a "
+        "surprising contrast, one a concrete scene the viewer has lived, one a sharp question. Each must be "
+        "true to the sources and must not promise more than the video shows. Use your favourite as beat 1; "
+        "an editor may swap in another, so beat 2 must follow from any of them.\n"
         "Banned: in today's world, let's dive in, have you ever wondered, buckle up, game changer, delve, "
         "it's important to note, research shows, studies show, in this video.\n"
-        "Storyboard: 6 to 8 beats. Each beat is {text, template, kicker, params}. text is one or two short "
-        "spoken sentences. The picture must show the specific idea of its own sentence, not decorate it. "
+        "Storyboard: 8 to 10 beats, so the picture changes every 3 to 5 seconds. Each beat is "
+        "{text, template, kicker, params}. text is one short spoken sentence (at most 16 words; two only "
+        "when both are very short). The picture must show the specific idea of its own sentence, not "
+        "decorate it. "
         "First beat: hook or question. Last beat: takeaway. Introduce the evidence with a study scene that "
         "names the publication and year as they appear in the sources. Never use the same template twice in "
         "a row. kicker is an optional 1-3 word content label such as 'The study' or 'The twist', never a "
         "structural word like Hook, Question, or Takeaway. Numbers on screen must appear in the sources.\n"
         f"{motion.brief()}\n"
         'Return JSON: {"title": str (under 60 characters, curiosity, no clickbait), '
+        '"hook_options": [{"text": str, "headline": str (max 9 words, on screen)}] (exactly 3), '
         '"beats": [{"text": str, "template": str, "kicker": str, "params": {}}], '
         '"claims": [{"text": str, "certainty": "established" or "hedged", "source": "S1"}] (every factual '
         'statement in the narration, paraphrased), "description": str (2 sentences, no hashtags), '

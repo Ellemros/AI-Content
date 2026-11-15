@@ -99,7 +99,16 @@ const Body: React.FC<{text: string; th: Theme; size?: number; width?: number; co
 
 const Obj: React.FC<{name?: string; th: Theme; size: number; t: number; extra?: Record<string, any>; style?: React.CSSProperties}> = ({name, th, size, t, extra, style}) => {
 	const Comp = OBJECTS[name ?? ''] ?? OBJECTS.lightbulb;
-	return <Comp th={th} size={size} t={t} style={style} {...(extra ?? {})} />;
+	const frame = useCurrentFrame();
+	// Every object breathes: a slow float and sway, phase-shifted per object so pairs never move in step.
+	const phase = (name ?? '').split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 60;
+	const bob = Math.sin(((frame + phase) / 46) * Math.PI) * size * 0.018;
+	const sway = Math.sin(((frame + phase) / 70) * Math.PI) * 1.6;
+	return (
+		<div style={{display: 'inline-flex', transform: `translateY(${bob}px) rotate(${sway}deg)`}}>
+			<Comp th={th} size={size} t={t} style={style} {...(extra ?? {})} />
+		</div>
+	);
 };
 
 const loop = (frame: number, period: number) => (frame % period) / period;

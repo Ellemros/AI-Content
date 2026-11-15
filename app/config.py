@@ -30,6 +30,16 @@ class Settings(BaseSettings):
     openai_script_model: str = "gpt-5.4"
     openai_factcheck_model: str = "gpt-5.4-mini"
 
+    # Cheap model steps (topic ranking, hook choice, fact check, story review): gemini or openai.
+    # Gemini falls back to OPENAI_FACTCHECK_MODEL when its quota runs out or it fails.
+    cheap_model_provider: str = "gemini"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash"
+    # 0 = free tier. Set the per-million prices when billing is enabled on the Google Cloud project.
+    gemini_input_cost_per_million: float = 0.0
+    gemini_output_cost_per_million: float = 0.0
+    gemini_cooldown_seconds: int = 3600
+
     elevenlabs_api_key: str = ""
     elevenlabs_base_url: str = "https://api.elevenlabs.io/v1"
     elevenlabs_voice_id_en: str = ""
@@ -44,7 +54,7 @@ class Settings(BaseSettings):
     kokoro_model_path: Path = Path("./data/models/kokoro/kokoro-v1.0.onnx")
     kokoro_voices_path: Path = Path("./data/models/kokoro/voices-v1.0.bin")
     kokoro_voice: str = "af_heart"
-    kokoro_speed: float = 1.0
+    kokoro_speed: float = 1.08
     # Model script attempts per production job. The second attempt receives the reviewer's issues.
     script_attempts: int = 3
     edge_voice_en: str = "en-US-AriaNeural"

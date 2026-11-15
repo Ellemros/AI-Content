@@ -74,3 +74,38 @@ Full per-video detail is in `output/review/money-minds-pilot/pilot-report.md`. E
 - **Untested with real viewers.** Retention, revenue and audience response are unmeasured; no video has had a viewer.
 - **Intelligibility of the narration is not checked automatically.** No speech recognition runs on the mix; loudness is checked.
 - **Reported costs are computed, not reconciled.** They come from token counts and configured prices, not from an invoice.
+
+## Round 2: quality, cheaper checks, and topic supply (2026-11-15)
+
+### What changed
+- **Hooks:** the writer gives three hooks: a contrast, a lived scene, and a question. A separate editor model picks the one most likely to stop a scroll without overpromising.
+- **Pacing:** 8 to 10 beats of one sentence each, so the picture changes every 3 to 5 seconds. Every object floats and sways gently.
+- **Loop:** the last sentence calls back to the hook, and the story editor reports whether the video loops.
+- **Voice:** Kokoro speaks at 1.08×.
+- **Cheaper checks:** hook choice, fact check, story review, and topic ranking run on Gemini (`gemini-3.5-flash`, free tier, $0). Topic proposals do too.
+  - On a quota error (HTTP 429), the steps fall back to `gpt-5.4-mini`, and Gemini rests for an hour instead of being retried.
+  - On any other failure they also fall back.
+  - The writer stays on GPT-5.4, so the fact checker is a different model family.
+- **Topic agent:** `find-topics`. Topics come from a model, but only those that survive these checks enter the backlog:
+  - Wikipedia's REST API confirms the article exists;
+  - OpenAlex finds an open-access paper that names the concept and has at least 30 citations;
+  - every source is fetched politely, and its text must actually discuss the concept;
+  - a topic with only one paper and no Wikipedia confirmation needs a paper with at least 100 citations.
+  
+  `pilot` runs the agent automatically when the backlog runs low.
+- **Approval:** `approve --job` records a person's approval. The publishing queue now also accepts approved videos (before, an approved video could never be queued).
+
+### Test (2 videos, `output/review/money-minds-v2/`)
+
+| Video | Status | Drafts | Cost | Notes |
+|---|---|---|---|---|
+| Why the same cash feels harder to spend | `ready` | 1 | $0.1155 | 12 scenes, sourced 63% vs 26% bars, ending calls back to the hook |
+| Why random numbers become starting prices | `needs_review` | 1 | $0.1198 | flagged for low storyboard variety; my review adds two more problems |
+
+The second video has two problems besides the flag:
+- It cites a lesser-known summary paper that the topic agent found, not the original study.
+- It reuses the lightbulb icon.
+
+The automated flag caught it, as intended.
+
+The cost per video fell from $0.13–0.29 to about $0.12, because only the writer is paid now.

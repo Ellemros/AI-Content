@@ -372,6 +372,7 @@ def _pilot(args) -> int:
                 topics_path=topics,
                 out_dir=out,
                 discover_feeds=not args.no_discover,
+                find_new=not args.no_new_topics,
             )
         except AppError as exc:
             print(exc.message)
@@ -481,6 +482,21 @@ def main(argv: list[str] | None = None) -> int:
         "pilot: its earlier videos and spend count against --budget.",
     )
     pilot.add_argument("--no-discover", action="store_true", help="Skip fetching the brand's feeds.")
+    pilot.add_argument(
+        "--no-new-topics", action="store_true", help="Do not run the topic agent when the backlog runs low."
+    )
+    ft = sub.add_parser(
+        "find-topics",
+        help="Propose new topics and add only those with verified, fetchable sources to the backlog.",
+    )
+    ft.add_argument("--brand", default="money-minds")
+    ft.add_argument("--count", type=int, default=8)
+    ft.add_argument("--topics", default="")
+    ap = sub.add_parser(
+        "approve",
+        help="A person approves a produced video for publishing. Uploads nothing by itself.",
+    )
+    ap.add_argument("--job", required=True)
     fv = sub.add_parser(
         "flag-video",
         help="Record a reviewer's finding on a produced video and set it to needs_review. Deletes nothing.",
@@ -563,6 +579,44 @@ def main(argv: list[str] | None = None) -> int:
         return _publishing_command(args)
     if args.command == "pilot":
         return _pilot(args)
+    if args.command == "find-topics":
+        from app.services.research.topic_agent import find_topics
+
+        init_db()
+        with session_scope() as session:
+            brand = session.scalar(select(Brand).where(Brand.slug == args.brand))
+            if brand is None:
+                print("Brand was not found.")
+                return 1
+            path = Path(args.topics or f"topics/{args.brand}.json")
+            try:
+                found = find_topics(session, brand, path, count=args.count)
+            except AppError as exc:
+                print(exc.message)
+                return 1
+            for entry in found["added"]:
+                print(f"Added: {entry['title']} ({len(entry['sources'])} source(s))")
+            for entry in found["rejected"]:
+                print(f"Skipped: {entry['title']} ({entry['why']})")
+            print(f"Backlog: {path.resolve()}")
+        return 0
+    if args.command == "approve":
+        from app.services.pipeline import approve_video
+
+        init_db()
+        with session_scope() as session:
+            job = session.get(ProductionJob, args.job)
+            video = session.get(Video, job.video_id) if job is not None and job.video_id else None
+            if video is None:
+                print("No rendered video for that job.")
+                return 1
+            try:
+                approve_video(session, video)
+            except AppError as exc:
+                print(exc.message)
+                return 1
+            print(f"Approved: {video.path}. It can be published once publishing is turned on. Published: no.")
+        return 0
     if args.command == "flag-video":
         from app.services.production.pilot import flag_video
 

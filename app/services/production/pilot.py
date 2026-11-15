@@ -32,7 +32,6 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
 from app.core.errors import AppError, RunBudgetExceeded, SpendCapExceeded
 from app.core.time import utc_now
 from app.models import (
@@ -147,17 +146,17 @@ def rank(
     session: Session, brand: Brand, candidates: list[ContentOpportunity], backlog: dict[str, dict]
 ) -> list[dict]:
     """Score candidates with the small model; without a model, keep the backlog order. Returns rows."""
-    from app.providers.openai_provider import OpenAIProvider
     from app.services.strategy import STRUCTURES
 
-    settings = get_settings()
     rows = candidates[:RANK_LIMIT]
     if not rows:
         return []
     items = {
         row.id: session.get(DiscoveredItem, row.discovered_item_id) for row in rows if row.discovered_item_id
     }
-    if not (settings.openai_enabled() and settings.openai_factcheck_model):
+    from app.services.production.llm import cheap_available, cheap_json
+
+    if not cheap_available():
         out = []
         for row in rows:
             topic = backlog.get(row.id)
@@ -204,8 +203,7 @@ def rank(
             _candidate_line(index + 1, row, items.get(row.id), backlog) for index, row in enumerate(rows)
         )
     )
-    provider = OpenAIProvider(session, model=settings.openai_factcheck_model)
-    result = provider.complete_json(operation="topic-ranking", system=system, user=user)
+    result = cheap_json(session, None, operation="topic-ranking", system=system, user=user)
     scored = {}
     for entry in (result or {}).get("topics") or []:
         try:
@@ -308,6 +306,7 @@ def run(
     discover_feeds: bool = True,
     max_attempts: int | None = None,
     label: str = "",
+    find_new: bool = True,
 ) -> RunResult:
     from app.services.production.pipeline import eligible_opportunities, produce_next
 
@@ -331,6 +330,28 @@ def run(
         backlog = seed_backlog(session, brand, load_backlog(topics_path) if topics_path else [])
         session.commit()
         candidates = eligible_opportunities(session, brand)
+        fresh = [row for row in candidates if row.id in backlog]
+        if topics_path is not None and find_new and len(fresh) < count + 2:
+            # Running low on researched topics: the topic agent proposes and verifies more.
+            from app.services.research.topic_agent import find_topics
+
+            try:
+                found = find_topics(session, brand, topics_path, count=8)
+                result.ranking.append(
+                    {
+                        "discovery": {
+                            "topic_agent": {
+                                "added": [entry["title"] for entry in found["added"]],
+                                "rejected": found["rejected"],
+                            }
+                        }
+                    }
+                )
+            except (AppError, OSError) as exc:
+                result.ranking.append({"discovery": {"topic_agent": {"error": str(exc)[:300]}}})
+            backlog = seed_backlog(session, brand, load_backlog(topics_path))
+            session.commit()
+            candidates = eligible_opportunities(session, brand)
         try:
             ranked = rank(session, brand, candidates, backlog)
         except (RunBudgetExceeded, SpendCapExceeded) as exc:
@@ -378,7 +399,7 @@ def run(
             }
             if job.status == "failed" and "Run budget reached" in (job.error or ""):
                 result.stopped_because = job.error
-            if job.status == "succeeded":
+            if _passed(session, job):
                 produced += 1
             result.videos.append(entry)
         result.spent_usd = float(run_spend(session, since))
@@ -617,6 +638,8 @@ def export_job(session: Session, job: ProductionJob, dest: Path, pick: dict | No
         if job.finished_at and job.started_at
         else None,
         "files": files,
+        "hook_choice": report.get("hook_choice") or {},
+        "check_models": report.get("check_models") or {},
         "published": False,
     }
     _write(dest / "summary.json", summary)
