@@ -33,7 +33,27 @@ cd ..
 python -m app.cli set-renderer --brand money-minds --renderer motion
 ```
 
-Topics can also be added as a viewer question with chosen sources (`add-topic --brand money-minds --question "..." --url URL --url URL`). A motion video stays `needs_review` until a person has watched it; `rerender --job JOB_ID` redraws the picture from the stored script and narration at no model cost. The design and its reasoning are in [docs/visual-direction.md](docs/visual-direction.md).
+Topics can also be added as a viewer question with chosen sources (`add-topic --brand money-minds --question "..." --url URL --url URL`). `rerender --job JOB_ID` redraws the picture from the stored script and narration at no model cost. The design and its reasoning are in [docs/visual-direction.md](docs/visual-direction.md).
+
+### Production run (several videos, one command)
+
+```
+python -m app.cli pilot --brand money-minds --videos 5 --budget 5
+```
+
+The command does the following:
+1. Fetches the brand's feeds and adds the topic backlog in `topics/money-minds.json` (viewer questions with primary sources).
+2. Ranks every eligible topic with one small model call.
+3. Picks the best topics, each with a different theme and story structure.
+4. Produces each topic through the full pipeline: dossier, writer, independent fact check, story editor, storyboard validation, Kokoro, Remotion, and QA.
+5. Writes a review package to `output/review/money-minds-pilot/`. If that folder already has files, a timestamped sibling folder is used, so an earlier package is never overwritten.
+
+Spending and safety:
+- `--budget` is a hard limit for every paid call in the run. Each call is checked before it is sent, against its worst-case cost, and a new video only starts if the budget could still finish it.
+- A topic that fails is replaced by the next one; it is not retried blindly.
+- A video that passes every automated check is `ready`, but it still needs a person to approve it before any publish step. Soft flags make it `needs_review`.
+- Nothing is published.
+- `--no-discover` skips the feeds.
 
 The last command prints the MP4 path. `uvicorn app.main:app` serves the dashboard at http://127.0.0.1:8000/production .
 

@@ -1,6 +1,7 @@
 """Select an opportunity, research the page, and render one local vertical video."""
 
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -188,6 +189,7 @@ def produce_next(
     allow_placeholder: bool = True,
     test_run: bool = False,
     retry: bool = False,
+    structure: str = "",
 ) -> ProductionJob | None:
     if brand.status == "paused":
         raise AppError(f"{brand.name} is paused. No video was rendered.")
@@ -218,6 +220,7 @@ def produce_next(
         allow_placeholder=allow_placeholder,
         test_run=test_run,
         retry=retry and bool(opportunity_id),
+        structure=structure,
     )
 
 
@@ -241,6 +244,7 @@ def _produce(
     allow_placeholder: bool = True,
     test_run: bool = False,
     retry: bool = False,
+    structure: str = "",
 ) -> ProductionJob:
     lock = _opportunity_lock(opportunity.id)
     if not lock.acquire(blocking=False):
@@ -303,6 +307,7 @@ def _produce(
                 stock_client=stock_client,
                 allow_placeholder=allow_placeholder,
                 test_run=test_run,
+                structure=structure,
             )
         except Exception as exc:
             message = getattr(exc, "message", None) or str(exc)
@@ -337,6 +342,7 @@ def _run(
     stock_client,
     allow_placeholder: bool = True,
     test_run: bool = False,
+    structure: str = "",
 ) -> None:
     if opportunity.status == "held" or (opportunity.hold_reason or "").strip():
         job.stage = "select"
@@ -377,7 +383,9 @@ def _run(
     language = brand.language if brand.language in LANGUAGES else "en"
     job.stage = "script"
     topic = _topic(session, brand, opportunity, item, language)
-    draft = _write_script(session, job, brand, topic, opportunity, item, dossier, language)
+    draft = _write_script(
+        session, job, brand, topic, opportunity, item, dossier, language, structure=structure
+    )
     if len(draft["beats"]) < 4:
         raise AppError("The script did not produce enough scenes.")
     if sources:
@@ -496,6 +504,7 @@ def _run(
         sfx = motion.sfx_track(work / "sfx.wav", motion_plan)
         motion.mix(silent, Path(audio.path), Path(music.path), sfx, output)
         motion_qa = visual_qa.inspect(output, work, motion_plan)
+        motion_qa["checks"].extend(visual_qa.storyboard_checks([scene["motion"] for scene in scenes]))
         images = [Path(path) for path in motion_qa["scene_frames"]]
     else:
         motion_qa = None
@@ -583,14 +592,14 @@ def _run(
         soft_visual = [c["detail"] for c in motion_qa["checks"] if not c["required"] and not c["passed"]]
         if failed_visual:
             report["status"] = "failed"
-        elif report["status"] != "failed":
-            # Automated checks cannot judge storytelling. A person signs off a motion video.
+        elif soft_visual and report["status"] != "failed":
+            # A soft check flagged something a person should look at before approving.
             report["status"] = "needs_review"
         report["warnings"] = [
             *soft_visual,
-            "Awaiting human visual review of the motion-graphics video.",
             *(report.get("warnings") or []),
         ]
+        report["story_review"] = draft.get("story_review") or {}
     quality_status = report["status"]
     warnings = _voice_warnings(audio, report.get("warnings") or [])
     if editorial_warning:
@@ -634,7 +643,16 @@ def _run(
         ]
         raise AppError("Production checks failed: " + ", ".join(failed))
     video.status = quality_status
-    if quality_status == "ready":
+    if quality_status == "ready" and motion_plan is not None:
+        # Every automated check passed. A person still approves each video before any publish step.
+        topic.status = "Ready"
+        opportunity.production_status = "ready"
+        opportunity.production_block_reason = (
+            "Passed every automated check. Waiting for a person to approve it. It was not published."
+        )
+        metadata["awaiting_approval"] = True
+        job.report = {**job.report, "metadata": metadata, "awaiting_approval": True, "published": False}
+    elif quality_status == "ready":
         topic.status = "Ready"
         opportunity.production_status = "ready"
         opportunity.production_block_reason = _READY
@@ -738,17 +756,21 @@ def _preview_review(session: Session, topic: Topic, draft: dict, audience: str) 
     )
 
 
-def _write_script(session, job, brand, topic, opportunity, item, dossier, language: str) -> dict:
+def _write_script(
+    session, job, brand, topic, opportunity, item, dossier, language: str, structure: str = ""
+) -> dict:
     """Ask the model for a script, review it, and ask once more with the reviewer's issues.
 
     Without an OpenAI key the labelled dossier fallback is used (needs_review).
     With a key, a script that still fails after the revision stops the job:
     stitched source sentences are not rendered in place of a rejected script.
     """
-    from app.services.strategy import choose_format
+    from app.services.strategy import STRUCTURES, choose_format
 
     settings = get_settings()
     plan = choose_format(session, brand)
+    if structure in STRUCTURES:
+        plan = {**plan, "structure": structure, "reason": "chosen for this topic by the topic ranking"}
     writer = _model_writer(session, job, plan["structure"], plan["target_seconds"])
     frame_language = brand.language if brand.language in _FRAMES_LANGS else language
     if writer is None:
@@ -790,19 +812,41 @@ def _write_script(session, job, brand, topic, opportunity, item, dossier, langua
             continue
         review = _preview_review(session, topic, draft, audience)
         details = [str(issue.get("detail") or issue.get("kind")) for issue in review["issues"]]
+        fact_problems: list[str] = []
+        story: dict = {}
         if review["passed"]:
-            problems = _fact_check(session, job, draft, dossier.extracted_text)
-            if problems:
+            fact_problems = _fact_check(session, job, draft, dossier.extracted_text)
+            if fact_problems:
                 review = {**review, "passed": False}
-                details = [f"Fact check: {problem}" for problem in problems]
-        attempts.append({"passed": review["passed"], "score": review["quality_score"], "issues": details})
+                details = [f"Fact check: {problem}" for problem in fact_problems]
+        if review["passed"]:
+            story = _story_review(session, job, draft, opportunity)
+            if story.get("blocking"):
+                review = {**review, "passed": False}
+                details = [f"Story editor: {problem}" for problem in story["blocking"]]
+        attempts.append(
+            {
+                "passed": review["passed"],
+                "score": review["quality_score"],
+                "issues": details,
+                "fact_check": "passed"
+                if review["passed"] or story
+                else ("failed" if fact_problems else "not run"),
+                "story_review": story or None,
+                "hook": draft.get("hook", ""),
+            }
+        )
         if review["passed"]:
             draft["attempts"] = attempts
             draft["format"] = plan
+            draft["story_review"] = story
             return draft
         feedback = "The editorial reviewer rejected the previous draft:\n- " + "\n- ".join(details)
         feedback += f"\nPrevious opening (do not reuse): {draft['hook']}"
     last = attempts[-1]["issues"] if attempts else ["no draft"]
+    # Keep every rejected draft's reasons on the job: a failed video can be reviewed and its cost explained.
+    if job is not None:
+        job.report = {**(job.report or {}), "script_attempts": attempts, "format": plan}
     raise AppError(f"The model script failed review after {len(attempts)} drafts: " + "; ".join(last)[:400])
 
 
@@ -1071,15 +1115,28 @@ def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: st
         "say otherwise), overstated (stated as certain or general when the sources hedge, "
         "use a small sample, "
         "a lab task, a price range, animals, or correlation), "
-        "or missing_caveat (a limitation without which a "
-        "viewer would be misled). Questions, the hook's framing of a question, and plainly labelled opinion "
+        "missing_caveat (a limitation without which a "
+        "viewer would be misled), or misattributed (a finding credited to a publication, year, or "
+        "author that the sources do not tie to that finding; a title in a reference list is not "
+        "evidence of what that work found). Questions, the hook's framing of a question, and plainly "
+        "labelled opinion "
         "are fine. Be exact; do not flag style. Return JSON: "
         '{"problems": [{"sentence": str, "kind": str, "why": str}]}. Empty list if all is supported.'
     )
     hints = draft.get("hedge_hints") or []
+    cards = []
+    for item in draft.get("beat_directions") or []:
+        direction = item.get("direction") or {}
+        params = direction.get("params") if isinstance(direction.get("params"), dict) else {}
+        if direction.get("template") == "study":
+            cards.append(
+                f"- On-screen study card: {params.get('source', '')}: {params.get('finding', '')} "
+                f"(caveat: {params.get('caveat', '')})"
+            )
     user = (
         "Narration:\n"
         + "\n".join(f"- {beat}" for beat in draft["beats"])
+        + ("\n" + "\n".join(cards) if cards else "")
         + (
             "\n\nA word-overlap check thinks these may drop a hedge the source uses. Judge them carefully:\n"
             + "\n".join(f"- {hint}" for hint in hints)
@@ -1125,6 +1182,97 @@ def _fact_check(session: Session, job: ProductionJob, draft: dict, extracted: st
             why = str(item.get("why", ""))[:200]
             out.append(f'{item.get("kind", "problem")}: "{sentence}" ({why})')
     return out[:6]
+
+
+def _story_review(session: Session, job: ProductionJob, draft: dict, opportunity) -> dict:
+    """An editor model judges what heuristics cannot: does the hook deliver, is there a payoff,
+    does each picture show its sentence. Blocking problems send the draft back for a rewrite.
+
+    Returns {} when no review model is configured (the video then waits for a person anyway).
+    """
+    settings = get_settings()
+    if not settings.openai_enabled() or not settings.openai_factcheck_model:
+        return {}
+    provider = OpenAIProvider(session, model=settings.openai_factcheck_model)
+    system = (
+        "You are the senior editor of a short-form explainer channel about the psychology of money. "
+        "You decide whether a script and storyboard are good enough to film. Judge strictly but fairly; "
+        "do not ask for style preferences. Check:\n"
+        "1. hook_delivers: does the first sentence create a specific question or tension that the video "
+        "actually answers? A hook that promises more than the evidence shows is misleading.\n"
+        "2. payoff: does the viewer learn something concrete and non-obvious by the end, and does the last "
+        "beat land it in fresh words (not a generic moral, not advice, not 'it depends')?\n"
+        "3. scenes: for each beat, does the planned picture (template and params) show the idea of its own "
+        "sentence? A picture of a generic object for a specific claim is a mismatch.\n"
+        "4. filler: beats that repeat an earlier point or add nothing.\n"
+        "5. causation: wording that presents a correlation or a single lab result as a proven "
+        "general cause.\n"
+        'Return JSON: {"hook_delivers": bool, "misleading_hook": bool, "payoff": bool, '
+        '"generic_ending": bool, "mismatched_scenes": [int] (1-based), "filler_beats": [int], '
+        '"causal_overreach": [str], "notes": str (two sentences of concrete editing advice), '
+        '"retention_risk": "low" or "medium" or "high"}.'
+    )
+    directions = draft.get("beat_directions") or []
+    lines = []
+    for index, beat in enumerate(draft["beats"]):
+        direction = (directions[index].get("direction") if index < len(directions) else None) or {}
+        picture = json.dumps(
+            {"template": direction.get("template"), "params": direction.get("params")}, ensure_ascii=False
+        )[:400]
+        lines.append(f"{index + 1}. {beat}\n   picture: {picture}")
+    question = getattr(opportunity, "question", "") or ""
+    user = (
+        f"Title: {draft.get('title', '')}\n"
+        + (f"Viewer question the video answers: {question}\n" if question else "")
+        + "Beats:\n"
+        + "\n".join(lines)
+    )
+    cache_key = make_cache_key(
+        {
+            "provider": "openai",
+            "model": provider.model,
+            "operation": "story-review",
+            "system": system,
+            "user": user,
+        }
+    )
+    if get_cached(session, cache_key) is None:
+        assert_production_budget(session, job, provider._estimate(system, user))
+    result = provider.complete_json(operation="story-review", system=system, user=user)
+    usage = session.scalar(
+        select(APIUsage).where(APIUsage.operation == "story-review").order_by(APIUsage.created_at.desc())
+    )
+    if usage is not None:
+        add_cost(
+            session,
+            job,
+            provider="openai",
+            operation="story-review",
+            cost=usage.estimated_cost_usd,
+            cached=usage.cached,
+        )
+    result = result if isinstance(result, dict) else {}
+    blocking: list[str] = []
+    if result.get("misleading_hook"):
+        blocking.append("the hook promises more than the evidence shows")
+    if result.get("hook_delivers") is False:
+        blocking.append("the hook's question is never answered")
+    if result.get("payoff") is False:
+        blocking.append("no concrete payoff for the viewer")
+    if result.get("generic_ending"):
+        blocking.append("the ending is a generic moral; land the specific idea in fresh words")
+    mismatched = [int(i) for i in result.get("mismatched_scenes") or [] if str(i).isdigit()]
+    if len(mismatched) > 1:
+        blocking.append(f"pictures do not show their sentences in beats {mismatched}")
+    filler = [int(i) for i in result.get("filler_beats") or [] if str(i).isdigit()]
+    if len(filler) > 1:
+        blocking.append(f"beats {filler} repeat earlier points or add nothing")
+    for claim in (result.get("causal_overreach") or [])[:3]:
+        blocking.append(f"causal overreach: {str(claim)[:160]}")
+    notes = str(result.get("notes") or "")[:400]
+    if blocking and notes:
+        blocking.append(f"editor notes: {notes}")
+    return {**result, "blocking": blocking, "model": provider.model}
 
 
 def _motion_system(structure_brief: str, target_seconds: int) -> str:

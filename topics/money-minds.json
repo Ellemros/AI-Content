@@ -1,0 +1,81 @@
+{
+  "brand": "money-minds",
+  "note": "Evergreen topic backlog. Each topic is a viewer question plus open-access sources, primary research first. The pilot adds these as opportunities (same safety holds as discovered topics) and ranks them together with feed discoveries. Checked 2026-11-15: every URL below was fetched by app/services/research/dossier.py with its descriptive User-Agent. Sites that refused automated clients (NBER returned 403) were left out, not bypassed.",
+  "topics": [
+    {
+      "title": "Does more money keep making you happier?",
+      "question": "Does happiness stop rising above some income, or does more money keep making people happier? Why did two famous studies disagree?",
+      "structure": "myth_vs_fact",
+      "theme": "money and happiness",
+      "sources": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC10013834/",
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC2944762/"
+      ]
+    },
+    {
+      "title": "Why the furniture you build feels worth more",
+      "question": "Why do people value things they assembled themselves more than identical ready-made ones, and when does that stop working?",
+      "structure": "experiment",
+      "theme": "effort and value",
+      "sources": [
+        "https://dash.harvard.edu/bitstream/handle/1/12136084/norton%20mochon%20ariely%20third%20round[1].pdf",
+        "https://en.wikipedia.org/wiki/IKEA_effect"
+      ]
+    },
+    {
+      "title": "How a tip screen changes what you tip",
+      "question": "Do the suggested tip buttons on a payment screen change how much people tip? What happened in New York taxis?",
+      "structure": "versus",
+      "theme": "defaults and tipping",
+      "sources": [
+        "https://www.Gwern.net/doc/psychology/cognitive-bias/2014-haggag.pdf"
+      ]
+    },
+    {
+      "title": "Why the expensive wine tastes better",
+      "question": "Does a higher price actually change how much people enjoy the same wine, and what does a brain scan show?",
+      "structure": "mystery",
+      "theme": "price and expectations",
+      "sources": [
+        "https://pmc.ncbi.nlm.nih.gov/articles/PMC2242704/"
+      ]
+    },
+    {
+      "title": "The jam study: does more choice stop you buying?",
+      "question": "Did 24 jams really make shoppers buy less than 6 jams, and has the choice overload effect held up in later research?",
+      "structure": "three_points",
+      "theme": "choice overload",
+      "sources": [
+        "https://faculty.washington.edu/jdb/345/345%20Articles/Iyengar%20%26%20Lepper%20(2000).pdf",
+        "https://en.wikipedia.org/wiki/Choice_overload"
+      ]
+    },
+    {
+      "title": "Why you want more to sell it than to buy it",
+      "question": "Why do people ask more to give up a mug they own than they would pay to buy the same mug?",
+      "structure": "explainer",
+      "theme": "ownership and loss",
+      "sources": [
+        "https://en.wikipedia.org/wiki/Endowment_effect"
+      ]
+    },
+    {
+      "title": "The useless option that makes you pick the expensive one",
+      "question": "How can adding an option nobody wants change which of the other options people pick?",
+      "structure": "explainer",
+      "theme": "pricing menus",
+      "sources": [
+        "https://en.wikipedia.org/wiki/Decoy_effect"
+      ]
+    },
+    {
+      "title": "Why a big bill is harder to spend",
+      "question": "Are people less likely to spend one large banknote than the same amount in small notes and coins?",
+      "structure": "mystery",
+      "theme": "cash denominations",
+      "sources": [
+        "https://en.wikipedia.org/wiki/Denomination_effect"
+      ]
+    }
+  ]
+}

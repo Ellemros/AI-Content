@@ -23,8 +23,16 @@ TRANSITION_FRAMES = 12
 
 OBJECTS = (
     "card", "cash", "coin", "wallet", "receipt", "brain", "cart", "phone", "terminal", "tag", "gauge",
-    "piggy", "clock", "calendar", "person", "chart", "lightbulb",
+    "piggy", "clock", "calendar", "person", "chart", "lightbulb", "wine", "bottle", "jar", "box", "chair",
+    "taxi", "mug", "house", "menu", "gift",
 )  # fmt: skip
+# What the less obvious objects look like, so the writer picks the one that shows its sentence.
+OBJECT_NOTES = (
+    "tag = price tag; terminal = card payment terminal or tip screen; gauge = dial from low to high; "
+    "wine = wine glass; jar = jam jar; box = flat-pack cardboard box; chair = a chair being assembled; "
+    "mug = coffee mug labelled MINE; menu = price list with three options; chart = a generic rising line, "
+    "only for a trend in general, never to picture a specific study result (use bars or stat for that)"
+)
 
 # Template -> what it is for, and its fields. This text goes into the writer's prompt.
 TEMPLATES: dict[str, str] = {
@@ -66,7 +74,7 @@ def available() -> bool:
 def brief() -> str:
     names = ", ".join(OBJECTS)
     lines = "\n".join(f"- {name}: {text}" for name, text in TEMPLATES.items())
-    return f"Scene templates:\n{lines}\nObjects (only these): {names}."
+    return f"Scene templates:\n{lines}\nObjects (only these): {names}.\nObject notes: {OBJECT_NOTES}."
 
 
 def _numbers(value) -> set[str]:
@@ -93,7 +101,9 @@ def number_in_context(value, context: str, source_text: str) -> bool:
 def normalise(beat: dict, allowed_numbers: set[str], source_text: str = "") -> dict:
     """Keep a valid template and its fields. Unsourced numbers demote the scene to an object."""
     template = str(beat.get("template") or "").strip().lower()
+    requested = template
     params = beat.get("params") if isinstance(beat.get("params"), dict) else {}
+    asked_objects = _object_names(params)
     if template not in TEMPLATES:
         template = "object"
     shown = {key: value for key, value in params.items() if not key.endswith("_word")}
@@ -138,12 +148,38 @@ def normalise(beat: dict, allowed_numbers: set[str], source_text: str = "") -> d
     kicker = str(beat.get("kicker") or "").strip()[:28]
     if kicker.lower().rstrip("?!:. ") in _STRUCTURAL:
         kicker = ""
-    return {"template": template, "kicker": kicker, "params": params}
+    scene = {"template": template, "kicker": kicker, "params": params}
+    replaced = sorted(name for name in asked_objects if name not in OBJECTS)
+    if requested != template or replaced:
+        # Kept for QA: a storyboard that lost many of its pictures no longer illustrates its narration.
+        scene["demoted"] = {"requested": requested, "unknown_objects": replaced}
+    return scene
+
+
+def _object_names(value) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"object", "object2"} and item:
+                found.add(str(item).strip().lower())
+            else:
+                found |= _object_names(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _object_names(item)
+    return found
 
 
 def _short(text: str, words: int = 9) -> str:
-    parts = str(text).split()
-    return " ".join(parts[:words]) + ("…" if len(parts) > words else "")
+    """A whole short sentence from the narration for a replaced picture, or '' (caption only).
+
+    Never a sentence cut off with an ellipsis: the viewer would read half a thought.
+    """
+    from app.services.textutil import split_sentences
+
+    sentences = [s.strip() for s in split_sentences(str(text)) if s.strip()]
+    fitting = [s for s in sentences if len(s.split()) <= words]
+    return max(fitting, key=lambda s: len(s.split())) if fitting else ""
 
 
 def _clean_objects(value):

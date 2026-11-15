@@ -48,3 +48,19 @@ class NotFoundError(AppError):
 
 class QualityGateError(AppError):
     status_code = 422
+
+
+class RunBudgetExceeded(AppError):
+    """A production run (such as the pilot) would go over its own hard spending limit."""
+
+    status_code = 402
+
+    def __init__(self, spent: object, cap: object, estimate: object) -> None:
+        super().__init__(
+            "Run budget reached. "
+            f"This run has spent ${float(spent):.4f} of its ${float(cap):.2f} limit, and the next call "
+            f"could cost up to ${float(estimate):.4f}. Nothing more is spent in this run."
+        )
+        self.spent = spent
+        self.cap = cap
+        self.estimate = estimate

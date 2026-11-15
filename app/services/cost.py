@@ -8,11 +8,45 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.core.errors import SpendCapExceeded
+from app.core.errors import RunBudgetExceeded, SpendCapExceeded
 from app.core.time import month_key, utc_now
 from app.models import APIUsage, Video
 
 _scope: ContextVar[dict[str, str | None] | None] = ContextVar("usage_scope", default=None)
+_run_cap: ContextVar[tuple | None] = ContextVar("run_cap", default=None)
+
+
+@contextmanager
+def run_budget(cap_usd: float | Decimal, since=None):
+    """A hard spending limit for one run (all paid calls made since it started, cached calls excluded).
+
+    Every paid call checks it before the request, against the call's worst-case cost,
+    so the run stops before it could go over the limit, not after.
+    """
+    start = since or utc_now()
+    token = _run_cap.set((start, Decimal(str(cap_usd))))
+    try:
+        yield start
+    finally:
+        _run_cap.reset(token)
+
+
+def run_spend(session: Session, since) -> Decimal:
+    total = session.scalar(
+        select(func.coalesce(func.sum(APIUsage.estimated_cost_usd), 0)).where(
+            APIUsage.created_at >= since,
+            APIUsage.cached.is_(False),
+        )
+    )
+    return Decimal(str(total or 0))
+
+
+def run_remaining(session: Session) -> Decimal | None:
+    current = _run_cap.get()
+    if current is None:
+        return None
+    since, cap = current
+    return cap - run_spend(session, since)
 
 
 def _current_scope() -> dict[str, str | None]:
@@ -51,6 +85,12 @@ def assert_within_cap(session: Session, estimate: Decimal) -> None:
     cap = Decimal(str(get_settings().monthly_spend_cap_usd))
     if spent + estimate > cap:
         raise SpendCapExceeded(spent, cap, estimate)
+    current = _run_cap.get()
+    if current is not None:
+        since, run_cap = current
+        run_spent = run_spend(session, since)
+        if run_spent + estimate > run_cap:
+            raise RunBudgetExceeded(run_spent, run_cap, estimate)
 
 
 def record_usage(
@@ -99,9 +139,7 @@ def video_cost_rows(session: Session, key: str | None = None) -> tuple[list[dict
         first_for_script.setdefault(video.script_id, video.id)
     totals = {video.id: Decimal("0") for video in videos}
     unassigned = Decimal("0")
-    rows = session.scalars(
-        select(APIUsage).where(APIUsage.month_key == current, APIUsage.cached.is_(False))
-    )
+    rows = session.scalars(select(APIUsage).where(APIUsage.month_key == current, APIUsage.cached.is_(False)))
     for row in rows:
         amount = Decimal(str(row.estimated_cost_usd or 0))
         if row.video_id and row.video_id in totals:

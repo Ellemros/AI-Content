@@ -28,6 +28,12 @@ from app.services.publishing.connectors import PUBLISHERS, PublishError
 DEFAULT_PLATFORMS = list(metadata.SHORT_PLATFORMS)
 
 
+def needs_person(video: Video) -> bool:
+    """Videos whose QA report asks for a human sign-off are never published unapproved, in any mode."""
+    report = video.quality_report if isinstance(video.quality_report, dict) else {}
+    return bool(report.get("human_review"))
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -124,7 +130,7 @@ def queue_ready(session: Session, brand: Brand) -> int:
         video = session.get(Video, post.video_id)
         if video is None or video.status != "ready":
             continue
-        if mode == "approval" and not video.approved:
+        if (mode == "approval" or needs_person(video)) and not video.approved:
             continue
         post.status = "queued"
         post.scheduled_at = _next_slot(session, brand, post.platform, _now())
@@ -177,7 +183,9 @@ def _publish_one(session: Session, post: PlatformPost, client: httpx.Client) -> 
     if brand.status == "paused" or (brand.publishing_mode or "test") not in {"approval", "autonomous"}:
         _note(post, "skipped", "The brand is paused or not in a publishing mode.")
         return False
-    if video.status != "ready" or (brand.publishing_mode == "approval" and not video.approved):
+    if video.status != "ready" or (
+        (brand.publishing_mode == "approval" or needs_person(video)) and not video.approved
+    ):
         _note(post, "skipped", "The video is not ready, or not approved in approval mode.")
         return False
     creds = credentials.load(brand.slug, post.platform)
